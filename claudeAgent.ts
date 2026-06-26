@@ -101,8 +101,8 @@ export class ClaudeAgent extends EventEmitter {
 
   send(msg: object): void {
     console.log("[SEND_MESSAGE]", msg);
-    if (!this.proc) throw new Error("Process not started");
-    this.proc.stdin!.write(JSON.stringify(msg) + "\n");
+    if (!this.proc) this.spawnProcess();
+    this.proc!.stdin!.write(JSON.stringify(msg) + "\n");
   }
 
   // ---------------------------------------------------------------------------

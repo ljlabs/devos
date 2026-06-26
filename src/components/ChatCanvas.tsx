@@ -46,10 +46,32 @@ interface ChatCanvasProps {
 /**
  * Parse raw ACP message to extract user-facing content
  * Supports all ACP chat object types
+ * 
+ * Supported message types:
+ * - user messages (role: "user")
+ * - agent_message_chunk (streaming text)
+ * - session/update:
+ *   - available_commands_update
+ *   - tool_call (pending)
+ *   - tool_call_update (result)
+ *   - agent_message_chunk (alt format)
+ *   - usage_update
+ *   - session_info_update
+ * - session/request_permission (permission prompts)
+ * - response (JSON-RPC responses)
+ * - permission_response (user choices)
  */
 function getMessageContent(msg: Message): { type: string; content: any } | null {
   const raw = msg.raw;
   if (!raw) return null;
+
+  // 0. PERMISSION RESPONSE: User's approval/denial choice
+  if (msg.type === "permission_response") {
+    return {
+      type: "permission_response",
+      content: raw.selected?.optionId || "unknown",
+    };
+  }
 
   // 1. USER MESSAGE: {role: "user", content: "..."}
   if (raw.role === "user" && raw.content) {
@@ -364,22 +386,22 @@ export default function ChatCanvas({
 
             // 4. Tool pending (showing what's about to execute)
             if (parsed.type === "tool_pending") {
-              const { title, kind, rawInput, toolCallId } = parsed.content;
+              const { title, kind, rawInput, toolCallId, status } = parsed.content;
+              const currentMsgIdx = messages.indexOf(msg);
               
               // Look ahead for matching tool result that has rawOutput
-              const resultIdx = messages.findIndex(
-                (m, idx) => {
-                  if (idx <= messages.indexOf(msg)) return false;
+              const resultMsg = messages.slice(currentMsgIdx + 1).find(
+                (m) => {
                   const update = m.raw?.params?.update;
                   return (
                     update?.toolCallId === toolCallId &&
                     update?.sessionUpdate === "tool_call_update" &&
-                    update?.rawOutput
+                    update?.status === "completed"
                   );
                 }
               );
               
-              const hasResult = resultIdx >= 0;
+              const hasResult = !!resultMsg;
               const isExpanded = expandedToolId === toolCallId;
 
               return (
@@ -412,10 +434,12 @@ export default function ChatCanvas({
                       </button>
 
                       {/* Tool output (collapsible, shown if expanded and result exists) */}
-                      {hasResult && isExpanded && (
+                      {hasResult && isExpanded && resultMsg && (
                         <div className="p-3 bg-black/95 max-h-60 overflow-y-auto custom-scrollbar">
                           <pre className="font-mono text-xs text-slate-300 whitespace-pre-wrap break-words">
-                            {messages[resultIdx].raw?.params?.update?.rawOutput}
+                            {typeof resultMsg.raw?.params?.update?.rawOutput === 'string' 
+                              ? resultMsg.raw.params.update.rawOutput 
+                              : JSON.stringify(resultMsg.raw?.params?.update?.rawOutput, null, 2)}
                           </pre>
                         </div>
                       )}
@@ -428,12 +452,75 @@ export default function ChatCanvas({
             // 5. Tool result (execution complete) - skip if grouped with pending
             // These are now shown inside the collapsed tool bubble, so we skip them here
             if (parsed.type === "tool_result") {
-              return null;
+              const { toolCallId } = parsed.content;
+              
+              // Check if there's a pending tool call before this result
+              const currentMsgIdx = messages.indexOf(msg);
+              const hasPendingBefore = messages.slice(0, currentMsgIdx).some(
+                (m) => {
+                  const update = m.raw?.params?.update;
+                  return (
+                    update?.toolCallId === toolCallId &&
+                    update?.sessionUpdate === "tool_call"
+                  );
+                }
+              );
+              
+              // If there's a pending call before this result, hide the result (it's shown in the expanded pending bubble)
+              if (hasPendingBefore) {
+                return null;
+              }
+              
+              // Orphaned result (no pending call before it) - render it standalone
+              const { status, title, kind, rawOutput } = parsed.content;
+              
+              return (
+                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text">
+                  <div className="w-8 h-8 bg-emerald-500/20 border border-emerald-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.15)] select-none">
+                    <CheckCircle2 size={16} className="text-emerald-400" />
+                  </div>
+                  <div className="flex-1 max-w-[90%]">
+                    <div className="border border-emerald-500/20 rounded-lg overflow-hidden bg-emerald-500/5">
+                      <div className="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 select-none">
+                        <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-400">
+                          {kind?.toUpperCase() || "TOOL"}: Complete
+                        </span>
+                      </div>
+                      <div className="p-3 bg-black/95 max-h-60 overflow-y-auto custom-scrollbar">
+                        <pre className="font-mono text-xs text-slate-300 whitespace-pre-wrap break-words">
+                          {typeof rawOutput === 'string' 
+                            ? rawOutput 
+                            : JSON.stringify(rawOutput, null, 2)}
+                        </pre>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
             }
 
             // Permission request
             if (parsed.type === "permission") {
               const { toolCall, options, permissionId } = parsed.content;
+              
+              // Look ahead for a permission_response that answers this request
+              const currentMsgIdx = messages.indexOf(msg);
+              const hasResponse = messages.slice(currentMsgIdx + 1).some(
+                (m) => {
+                  // Check if this is a permission_response message type
+                  if (m.type === "permission_response") {
+                    return true;
+                  }
+                  // Also check raw.type in case message type isn't set
+                  return m.raw?.type === "permission_response" && m.raw?.selected?.optionId;
+                }
+              );
+              
+              // Hide permission bubble if it's already been responded to
+              if (hasResponse) {
+                return null;
+              }
+              
               return (
                 <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text max-w-[90%]">
                   <div className="w-8 h-8 bg-amber-500/20 border border-amber-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(245,158,11,0.15)] select-none" />
@@ -473,6 +560,55 @@ export default function ChatCanvas({
                           </button>
                         ))}
                       </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            // Permission response (user's approval/denial choice)
+            if (parsed.type === "permission_response") {
+              const optionId = parsed.content;
+              const optionNames: { [key: string]: string } = {
+                "allow_always": "✓ Allow Always",
+                "allow": "✓ Allow",
+                "allow_once": "✓ Allow",
+                "reject": "✗ Reject",
+                "reject_once": "✗ Reject",
+              };
+              
+              return (
+                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text max-w-[90%]">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 select-none border ${
+                    optionId?.includes("allow") 
+                      ? "bg-emerald-500/20 border-emerald-500/40 shadow-[0_0_15px_rgba(16,185,129,0.15)]" 
+                      : "bg-red-500/20 border-red-500/40 shadow-[0_0_15px_rgba(239,68,68,0.15)]"
+                  }`}>
+                    {optionId?.includes("allow") 
+                      ? <CheckCircle2 size={16} className="text-emerald-400" />
+                      : <XCircle size={16} className="text-red-400" />
+                    }
+                  </div>
+                  <div className="flex-1">
+                    <div className={`border rounded-xl p-3 ${
+                      optionId?.includes("allow")
+                        ? "border-emerald-500/30 bg-emerald-500/5"
+                        : "border-red-500/30 bg-red-500/5"
+                    }`}>
+                      <p className={`text-sm font-semibold font-sans ${
+                        optionId?.includes("allow")
+                          ? "text-emerald-300"
+                          : "text-red-300"
+                      }`}>
+                        {optionNames[optionId] || optionId}
+                      </p>
+                      <p className={`text-[11px] mt-1 font-mono ${
+                        optionId?.includes("allow")
+                          ? "text-emerald-500/70"
+                          : "text-red-500/70"
+                      }`}>
+                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </p>
                     </div>
                   </div>
                 </div>

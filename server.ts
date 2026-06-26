@@ -315,13 +315,23 @@ app.post("/api/threads/:threadId/respond", async (req, res) => {
     return res.status(400).json({ error: "no pending permission" });
   }
 
-  const agent = ClaudeAgent.getInstance(threadId, ensureWorkspace(thread.workspaceId, thread.workspaceId));
+  const wsPath = ensureWorkspace(thread.workspaceId, thread.workspaceId);
+  const agent = ClaudeAgent.getInstance(threadId, wsPath);
+  wireAgent(agent, threadId);
 
-  // Send exactly what ACP expects
+  // Ensure agent is initialized and session is resumed before sending permission response
+  try {
+    await agent.initialize(thread.sessionId);
+  } catch (err) {
+    console.error("[server] Failed to initialize agent for permission response:", err);
+    return res.status(500).json({ error: "Failed to initialize agent" });
+  }
+
+  // Send exactly what ACP expects: result.selected structure
   agent.send({
     jsonrpc: "2.0",
     id: thread.pendingPermissionId,
-    result: { outcome: { outcome: "selected", optionId } },
+    result: { selected: { optionId } },
   });
 
   updateDb((db) => {
