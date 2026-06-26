@@ -1,0 +1,6 @@
+{
+  "name": "DevOS",
+  "description": "Server-driven multi-agent chat workspace for local file directories and parallel conversation threads with interactive ACP gatekeeping.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
