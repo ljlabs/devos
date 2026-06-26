@@ -715,8 +715,7 @@ app.post("/api/threads/:threadId/deny", (req, res) => {
     console.log(`[DENY] Rejecting tool: ${pendingTool.toolInput}`);
     // Call the resolver - it will handle DB updates
     acp.resolvePendingToolApproval(false).then(() => {
-      // Now unblock to process queued notifications
-      acp.unblockAndResumeNotifications();
+      // Stream was already unblocked by the denial resolver
     });
     return res.json({ success: true, message: "Tool execution denied." });
   }
@@ -803,8 +802,8 @@ class ACPManager {
   private notificationQueue: any[] = [];
   private isBlocked = false;
   
-  // Track rejected tool calls so we can suppress their output
-  private rejectedToolCalls = new Set<string>();
+  // Track state after tool rejection
+  private suppressingAfterRejection = false;
 
   constructor(private threadId: string, private workspacePath: string) {}
 
@@ -851,6 +850,26 @@ class ACPManager {
       // Re-invoke handleAgentNotification to process the queued item
       this.handleAgentNotification({ method: "session/update", params: notification });
     }
+  }
+
+  public sendCancelNotification(): void {
+    if (!this.process || !this.sessionId) return;
+    const msg = {
+      jsonrpc: "2.0",
+      method: "session/cancel",
+      params: { sessionId: this.sessionId }
+    };
+    console.log(`[ACP] Sending session/cancel to stop in-flight turn`);
+    this.process.stdin!.write(JSON.stringify(msg) + "\n");
+  }
+
+  public startSuppressing(): void {
+    this.suppressingAfterRejection = true;
+    console.log(`[ACP] Suppression mode activated — all notifications will be dropped until turn ends`);
+  }
+
+  public stopSuppressing(): void {
+    this.suppressingAfterRejection = false;
   }
 
   private ensureProcess() {
@@ -919,6 +938,20 @@ class ACPManager {
       const sessionUpdate = update?.sessionUpdate;
       
       console.log(`[AGENT NOTIFICATION] sessionUpdate type: ${sessionUpdate}`);
+      
+      // If suppressing after rejection, drop everything except session end markers
+      if (this.suppressingAfterRejection) {
+        // Allow usage_update and session_info_update through so the prompt() call can settle
+        if (sessionUpdate !== "usage_update" && sessionUpdate !== "session_info_update") {
+          console.log(`[SUPPRESSION] Dropping ${sessionUpdate} after tool rejection`);
+          return;
+        }
+        // On session_info_update, we know the turn is done — stop suppressing
+        if (sessionUpdate === "session_info_update") {
+          this.suppressingAfterRejection = false;
+          console.log(`[SUPPRESSION] Turn ended, suppression lifted`);
+        }
+      }
       
       // If currently blocked (awaiting permission), queue all notifications
       if (this.isBlocked) {
@@ -1002,7 +1035,7 @@ class ACPManager {
             db.messages.push(permissionMsg);
             writeDb(db);
 
-            // Set up resolver for UI approval — when called, unblock and resume queue
+            // Set up resolver for UI approval — when called, unblock and resume queue or suppress
             this.pendingToolApproval = {
               toolCallId,
               toolName: toolType,
@@ -1011,27 +1044,30 @@ class ACPManager {
                 console.log(`[TOOL APPROVAL] ${toolType}: ${toolInput} - ${approved ? "APPROVED" : "REJECTED"}`);
                 
                 if (!approved) {
-                  // Track this tool call as rejected so we can suppress its output
-                  this.rejectedToolCalls.add(update.toolCallId);
-                  console.log(`[REJECTION] Marked tool call ${update.toolCallId} as rejected - will suppress its output`);
+                  // Tell the ACP agent to cancel the in-flight turn immediately
+                  this.sendCancelNotification();
+                  // Activate suppression so queued/incoming notifications are dropped
+                  this.startSuppressing();
+                  // Clear the notification queue — don't process any buffered updates
+                  const dropped = this.notificationQueue.length;
+                  this.notificationQueue = [];
+                  console.log(`[REJECTION] Dropped ${dropped} queued notifications, breaking agent loop`);
                 }
                 
                 const freshDb = readDb();
-                // Update the security_permission message to reflect the decision
                 const permMsg = freshDb.messages.find(m => m.id === permissionMsgId);
                 if (permMsg && permMsg.pendingAction) {
                   permMsg.pendingAction.approved = approved;
                 }
-                
                 const thread = freshDb.threads.find(t => t.id === this.threadId);
                 if (thread) {
                   thread.status = approved ? "thinking" : "idle";
                 }
-                
                 writeDb(freshDb);
                 
-                // Unblock and resume message processing
-                this.unblockAndResumeNotifications();
+                // Unblock the stream (for approved: resumes normally; for denied: stream is 
+                // unblocked but suppression ensures nothing gets written to DB)
+                this.isBlocked = false;
               }
             };
 
@@ -1046,16 +1082,6 @@ class ACPManager {
             return;
           }
         } else if (sessionUpdate === "tool_call_update" && update.status === "completed") {
-          // Check if this tool call was rejected — if so, suppress its output and don't persist it
-          if (this.rejectedToolCalls.has(update.toolCallId)) {
-            console.log(`[SUPPRESSION] Suppressing output for rejected tool call ${update.toolCallId}`);
-            // Still call messageCallback but don't persist the result
-            if (this.messageCallback) {
-              this.messageCallback(msg.params);
-            }
-            return;
-          }
-
           const db = readDb();
           const lastToolCall = db.messages
             .filter(m => m.threadId === this.threadId && m.type === 'tool_call')
@@ -1386,6 +1412,9 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
         }
         writeDb(freshDb);
       });
+
+      // Ensure suppression is stopped when the prompt resolves
+      acp.stopSuppressing();
 
       const finalDb = readDb();
       const fThread = finalDb.threads.find(t => t.id === threadId);
