@@ -9,72 +9,47 @@ export interface Workspace {
   path: string;
 }
 
-export interface SymbolInfo {
-  type: 'C' | 'f' | 'M'; // Class, Function, Method
-  name: string;
-}
-
 export interface Thread {
   id: string;
   workspaceId: string;
   title: string;
-  targetFile?: string;
-  status: 'thinking' | 'running' | 'awaiting_permission' | 'idle';
-  activeSymbols: SymbolInfo[];
-  dependencies: string[];
   sessionId?: string;
+  status: 'thinking' | 'running' | 'awaiting_permission' | 'idle';
+  
+  // Current permission request (from ACP) — populated when ACP sends session/request_permission
+  pendingPermissionId?: number;
+  pendingPermissionOptions?: Array<{
+    kind: string;
+    name: string;
+    optionId: string;
+  }>;
 }
 
-export interface CodeBlock {
-  filePath: string;
-  content: string;
-}
+export type ACPMessageMethod = 
+  | 'session/update'
+  | 'session/request_permission'
+  | 'session/prompt'
+  | 'initialize'
+  | string;
 
-export interface LogsInfo {
-  command: string;
-  output: string;
-}
-
-export interface PendingAction {
-  command: string;
-  approved: boolean | null; // null: pending, true: approved, false: denied
-}
-
-export type MessageType = 'user_message' | 'agent_message' | 'tool_call' | 'tool_result' | 'security_permission';
-
+/**
+ * Raw ACP message stored as-is in db.json.
+ * This is the source of truth for all conversation state.
+ */
 export interface Message {
   id: string;
   threadId: string;
-  type: MessageType;
-  sender: 'user' | 'agent';
   timestamp: string;
-  text: string;
   
-  // For user_message and agent_message
-  codeBlock?: CodeBlock | null;
+  // The raw, unmodified ACP message (JSON-RPC request/response/notification)
+  raw: any;
   
-  // For tool_call
-  toolName?: string;
-  toolCommand?: string;
-  
-  // For tool_result
-  logs?: LogsInfo | null;
-  toolCallId?: string; // Links to the tool_call message
-  
-  // For security_permission
-  pendingAction?: PendingAction | null;
-}
-
-export interface SecurityRule {
-  id: string;
-  commandPattern: string;
-  action: 'allow';
-  createdAt: string;
+  // Convenience field: the ACP method or message type
+  type?: ACPMessageMethod | 'response' | 'unknown';
 }
 
 export interface DatabaseSchema {
   workspaces: Workspace[];
   threads: Thread[];
   messages: Message[];
-  rules: SecurityRule[];
 }

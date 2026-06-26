@@ -10,23 +10,17 @@ import {
   RefreshCw, 
   Search, 
   History, 
-  Trash2, 
-  Check, 
   Plus, 
   FolderPlus, 
-  ShieldAlert, 
-  CheckCircle2, 
-  XCircle,
-  FileCode,
   ShieldCheck,
+  FileCode,
   Code
 } from "lucide-react";
 import WorkspaceSidebar from "./components/WorkspaceSidebar";
 import ThreadList from "./components/ThreadList";
 import ChatCanvas from "./components/ChatCanvas";
-import ContextExplorer from "./components/ContextExplorer";
 import { NewWorkspaceModal, NewThreadModal } from "./components/Dialogs";
-import { Workspace, Thread, Message, SecurityRule } from "./types";
+import { Workspace, Thread, Message } from "./types";
 
 export default function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -35,7 +29,6 @@ export default function App() {
   const [activeThreadId, setActiveThreadId] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState<string>("");
-  const [rules, setRules] = useState<SecurityRule[]>([]);
   
   // Navigation / views
   const [activeView, setActiveView] = useState<'threads' | 'search' | 'activity' | 'security'>('threads');
@@ -106,24 +99,11 @@ export default function App() {
     }
   };
 
-  const fetchRules = async () => {
-    try {
-      const res = await fetch("/api/rules");
-      if (res.ok) {
-        const data = await res.json();
-        setRules(data);
-      }
-    } catch (e) {
-      console.error("API error fetching rules", e);
-    }
-  };
-
   // Run on mount
   useEffect(() => {
     const initialize = async () => {
       setIsLoading(true);
       await fetchWorkspaces();
-      await fetchRules();
       
       // Setup mock global system logs for activity tab
       setGlobalLogs([
@@ -241,20 +221,6 @@ export default function App() {
     const messageText = inputText;
     setInputText("");
 
-    // Append user message instantly in client
-    const tempUserMsg: Message = {
-      id: `temp-${Date.now()}`,
-      threadId: activeThreadId,
-      type: "user_message",
-      sender: "user",
-      timestamp: new Date().toISOString(),
-      text: messageText,
-      codeBlock: null,
-      logs: null,
-      pendingAction: null
-    };
-    setMessages(prev => [...prev, tempUserMsg]);
-
     try {
       const res = await fetch(`/api/threads/${activeThreadId}/messages`, {
         method: "POST",
@@ -262,7 +228,7 @@ export default function App() {
         body: JSON.stringify({ text: messageText })
       });
       if (res.ok) {
-        // Fetch fresh thread state and messages
+        // Fetch fresh messages and thread state
         await fetchMessages(activeThreadId);
         await fetchThreads(activeWorkspaceId);
       }
@@ -271,74 +237,27 @@ export default function App() {
     }
   };
 
-  // Approve action
-  const handleApproveAction = async () => {
+  // Handle permission response from ACP permission request
+  const handlePermissionResponse = async (optionId: string) => {
     if (!activeThreadId) return;
     try {
-      const res = await fetch(`/api/threads/${activeThreadId}/approve`, {
-        method: "POST"
-      });
-      if (res.ok) {
-        setGlobalLogs(prev => [
-          `[${new Date().toLocaleTimeString()}] Terminal command execution approved by user on thread '${threads.find(t => t.id === activeThreadId)?.title}'`,
-          ...prev
-        ]);
-        await fetchMessages(activeThreadId);
-        await fetchThreads(activeWorkspaceId);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  // Deny action
-  const handleDenyAction = async () => {
-    if (!activeThreadId) return;
-    try {
-      const res = await fetch(`/api/threads/${activeThreadId}/deny`, {
-        method: "POST"
-      });
-      if (res.ok) {
-        setGlobalLogs(prev => [
-          `[${new Date().toLocaleTimeString()}] Terminal command blocked by user safety check.`,
-          ...prev
-        ]);
-        await fetchMessages(activeThreadId);
-        await fetchThreads(activeWorkspaceId);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  // Add wildcard rule
-  const handleAddRule = async (cmdPattern: string) => {
-    try {
-      const res = await fetch("/api/rules", {
+      const res = await fetch(`/api/threads/${activeThreadId}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ commandPattern: cmdPattern })
+        body: JSON.stringify({ optionId })
       });
       if (res.ok) {
-        await fetchRules();
         setGlobalLogs(prev => [
-          `[${new Date().toLocaleTimeString()}] Registered permanent rule clearance wildcard for: ${cmdPattern}`,
+          `[${new Date().toLocaleTimeString()}] Permission response sent: ${optionId}`,
           ...prev
         ]);
+        // Fetch fresh state
+        await fetchMessages(activeThreadId);
+        await fetchThreads(activeWorkspaceId);
       }
     } catch (e) {
       console.error(e);
     }
-  };
-
-  // Flush Rules
-  const handleClearRules = async () => {
-    // We can clear active rules client-side or simply reset them
-    setRules([]);
-    setGlobalLogs(prev => [
-      `[${new Date().toLocaleTimeString()}] Flushed local settings auto-approval policies.`,
-      ...prev
-    ]);
   };
 
   // Deploy Cloud Run action simulation
@@ -411,20 +330,9 @@ export default function App() {
             inputText={inputText}
             onChangeInput={setInputText}
             onSendMessage={handleSendMessage}
-            onApproveAction={handleApproveAction}
-            onDenyAction={handleDenyAction}
+            onPermissionResponse={handlePermissionResponse}
             onDeploy={handleDeploy}
             isDeploying={isDeploying}
-            onAddRule={handleAddRule}
-            rules={rules}
-          />
-
-          {/* COLUMN 4: CONTEXT EXPLORER */}
-          <ContextExplorer
-            activeThread={activeThread}
-            rules={rules}
-            onRemoveRule={(id) => setRules(prev => prev.filter(r => r.id !== id))}
-            onClearRules={handleClearRules}
           />
         </>
       )}
@@ -518,95 +426,16 @@ export default function App() {
       {/* GATEKEEPING RULES VIEW PANEL */}
       {activeView === 'security' && (
         <main className="flex-1 flex flex-col bg-[#0B0B0C] overflow-hidden p-8 animate-fadeIn">
-          <div className="max-w-4xl w-full mx-auto space-y-6 h-full flex flex-col">
-            <div className="flex items-center gap-2 select-none pb-4 border-b border-white/5 justify-between shrink-0">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="text-emerald-400" size={24} />
-                <h2 className="font-sans font-bold text-xl text-white">ACP Gatekeeping Clearance Policies</h2>
-              </div>
-              {rules.length > 0 && (
-                <button 
-                  onClick={handleClearRules}
-                  className="text-xs text-rose-400 hover:text-rose-300 hover:underline cursor-pointer"
-                >
-                  Clear All Policies
-                </button>
-              )}
-            </div>
-
-            <p className="text-sm text-slate-400 font-sans leading-relaxed shrink-0">
-              DevOS implements an interactive safety sandbox. Whenever Claude Code requests a destructive or external terminal script (such as <code className="bg-[#18181B] border border-white/5 px-1.5 py-0.5 rounded text-xs text-amber-400 font-mono">rm</code>, <code className="bg-[#18181B] border border-white/5 px-1.5 py-0.5 rounded text-xs text-amber-400 font-mono">git push</code>, or build bundles), the operation blocks. You can set wildcard patterns to auto-approve safe, routine commands in local configuration settings.
-            </p>
-
-            <div className="flex gap-3 py-3 border-y border-white/5 shrink-0 select-none">
-              <input
-                type="text"
-                placeholder="e.g. npm run test, jest --watchAll, py.test"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    handleAddRule((e.target as HTMLInputElement).value);
-                    (e.target as HTMLInputElement).value = "";
-                  }
-                }}
-                className="flex-1 bg-[#0E0E11] border border-white/10 rounded-lg px-4 py-2 text-sm text-slate-200 focus:outline-none focus:border-emerald-500 transition-colors font-mono"
-              />
-              <button 
-                onClick={(e) => {
-                  const input = e.currentTarget.previousSibling as HTMLInputElement;
-                  if (input.value.trim()) {
-                    handleAddRule(input.value);
-                    input.value = "";
-                  }
-                }}
-                className="bg-emerald-500 hover:bg-emerald-400 text-black px-5 py-2 rounded-lg font-bold text-xs cursor-pointer active:scale-95 transition-all"
-              >
-                Add Rule Pattern
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2">
-              <h4 className="text-[10px] font-mono font-bold tracking-widest text-slate-500 uppercase">
-                Currently Authorized Policies ({rules.length})
-              </h4>
-              
-              {rules.length === 0 ? (
-                <div className="bg-[#0E0E11]/40 border border-white/5 rounded-xl p-12 text-center text-slate-500 space-y-2 select-none">
-                  <ShieldCheck size={36} className="mx-auto text-slate-700" />
-                  <p className="text-sm font-semibold text-slate-400">Sandbox Safety Engaged</p>
-                  <p className="text-xs text-slate-600 max-w-sm mx-auto">
-                    No bypass command wildcards matching. All terminal operations proposed by agent will lock down until user clicks Approve.
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 select-none">
-                  {rules.map((rule) => (
-                    <div 
-                      key={rule.id}
-                      className="p-4 rounded-xl bg-[#0E0E11] border border-white/5 flex justify-between items-center shadow-md hover:border-emerald-500/20 transition-all"
-                    >
-                      <div className="space-y-1 overflow-hidden pr-2">
-                        <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-mono">
-                          <ShieldCheck size={14} />
-                          <span>AUTO_ALLOW_POLICY</span>
-                        </div>
-                        <p className="font-mono text-sm text-slate-200 truncate font-semibold" title={rule.commandPattern}>
-                          {rule.commandPattern}
-                        </p>
-                        <p className="text-[9px] text-slate-500 font-mono uppercase tracking-widest">
-                          Created {new Date(rule.createdAt).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <button 
-                        onClick={() => setRules(prev => prev.filter(r => r.id !== rule.id))}
-                        className="p-2 text-slate-500 hover:text-rose-400 hover:bg-rose-950/20 rounded-lg transition-all cursor-pointer shrink-0"
-                        title="Delete policy pattern"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+          <div className="max-w-4xl w-full mx-auto h-full flex items-center justify-center">
+            <div className="text-center space-y-4 select-none">
+              <ShieldCheck className="w-16 h-16 text-emerald-400 mx-auto opacity-20" />
+              <h2 className="font-sans font-bold text-xl text-white">Permissions Managed by ACP</h2>
+              <p className="text-sm text-slate-400 max-w-md mx-auto">
+                Permission requests are now managed dynamically by the Agent Client Protocol. When Claude requests access to files or system resources, you'll see interactive permission prompts in the chat.
+              </p>
+              <p className="text-xs text-slate-500 font-mono mt-4">
+                All permission decisions are routed through the ACP session/request_permission protocol.
+              </p>
             </div>
           </div>
         </main>
