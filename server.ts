@@ -597,7 +597,21 @@ app.post("/api/threads/:threadId/approve", async (req, res) => {
     return res.status(404).json({ error: "Thread not found" });
   }
 
-  // Find the last message that has a pendingAction
+  // Check for pending tool approval first (from tool_call gating)
+  const wsFullPath = path.join(WORKSPACES_DIR, thread.workspaceId);
+  const acp = ACPManager.getInstance(threadId, wsFullPath);
+  const pendingTool = acp.getPendingToolApproval();
+
+  if (pendingTool) {
+    console.log(`[APPROVE] Approving tool: ${pendingTool.toolInput}`);
+    // Call the resolver - it will handle DB updates
+    await acp.resolvePendingToolApproval(true);
+    // Now unblock to process queued notifications
+    acp.unblockAndResumeNotifications();
+    return res.json({ success: true, message: "Tool execution approved and continuing." });
+  }
+
+  // Fallback: look for legacy permission messages
   const threadMessages = db.messages.filter(m => m.threadId === threadId);
   const permissionMsgs = threadMessages.filter(m => m.type === 'security_permission' && m.pendingAction !== null);
   
@@ -614,8 +628,6 @@ app.post("/api/threads/:threadId/approve", async (req, res) => {
   writeDb(db);
 
   // Check if there is an active ACP agent process with a pending permission request
-  const wsFullPath = path.join(WORKSPACES_DIR, thread.workspaceId);
-  const acp = ACPManager.getInstance(threadId, wsFullPath);
   const resolver = acp.getPendingPermissionResolver();
   
   if (resolver) {
@@ -694,6 +706,22 @@ app.post("/api/threads/:threadId/deny", (req, res) => {
     return res.status(404).json({ error: "Thread not found" });
   }
 
+  // Check for pending tool approval first (from tool_call gating)
+  const wsFullPath = path.join(WORKSPACES_DIR, thread.workspaceId);
+  const acp = ACPManager.getInstance(threadId, wsFullPath);
+  const pendingTool = acp.getPendingToolApproval();
+
+  if (pendingTool) {
+    console.log(`[DENY] Rejecting tool: ${pendingTool.toolInput}`);
+    // Call the resolver - it will handle DB updates
+    acp.resolvePendingToolApproval(false).then(() => {
+      // Now unblock to process queued notifications
+      acp.unblockAndResumeNotifications();
+    });
+    return res.json({ success: true, message: "Tool execution denied." });
+  }
+
+  // Fallback: look for legacy permission messages
   const threadMessages = db.messages.filter(m => m.threadId === threadId);
   const permissionMsgs = threadMessages.filter(m => m.type === 'security_permission' && m.pendingAction !== null);
   
@@ -710,8 +738,6 @@ app.post("/api/threads/:threadId/deny", (req, res) => {
   writeDb(db);
 
   // Check if there is an active ACP agent process with a pending permission request
-  const wsFullPath = path.join(WORKSPACES_DIR, thread.workspaceId);
-  const acp = ACPManager.getInstance(threadId, wsFullPath);
   const resolver = acp.getPendingPermissionResolver();
   
   if (resolver) {
@@ -765,6 +791,20 @@ class ACPManager {
   private nextId = 1;
   private sessionId: string | null = null;
   private pendingPermissionResolver: ((approved: boolean) => void) | null = null;
+  private pendingToolApproval: {
+    toolCallId: string;
+    toolName: string;
+    toolInput: string;
+    resolver: (approved: boolean) => void;
+  } | null = null;
+  private lastToolCallId: string | null = null;
+  
+  // Queue for buffering notifications while awaiting approval
+  private notificationQueue: any[] = [];
+  private isBlocked = false;
+  
+  // Track rejected tool calls so we can suppress their output
+  private rejectedToolCalls = new Set<string>();
 
   constructor(private threadId: string, private workspacePath: string) {}
 
@@ -778,6 +818,39 @@ class ACPManager {
 
   public getPendingPermissionResolver() {
     return this.pendingPermissionResolver;
+  }
+
+  public getPendingToolApproval() {
+    return this.pendingToolApproval;
+  }
+
+  public resolvePendingToolApproval(approved: boolean): Promise<void> {
+    if (!this.pendingToolApproval) {
+      throw new Error("No pending tool approval");
+    }
+    
+    const resolver = this.pendingToolApproval.resolver;
+    this.pendingToolApproval = null;
+    resolver(approved);
+    
+    return Promise.resolve();
+  }
+
+  public setPendingPermissionResolver(resolver: ((approved: boolean) => void) | null) {
+    this.pendingPermissionResolver = resolver;
+  }
+
+  public unblockAndResumeNotifications(): void {
+    console.log(`[ACP] Unblocking message stream, resuming ${this.notificationQueue.length} queued notifications`);
+    this.isBlocked = false;
+    
+    // Process queued notifications recursively
+    while (this.notificationQueue.length > 0) {
+      const notification = this.notificationQueue.shift();
+      console.log(`[ACP] Processing queued notification: ${notification.update?.sessionUpdate}`);
+      // Re-invoke handleAgentNotification to process the queued item
+      this.handleAgentNotification({ method: "session/update", params: notification });
+    }
   }
 
   private ensureProcess() {
@@ -843,9 +916,19 @@ class ACPManager {
     // session/update carries streaming chunks, tool activity, etc.
     if (msg.method === "session/update") {
       const update = msg.params?.update;
+      const sessionUpdate = update?.sessionUpdate;
+      
+      console.log(`[AGENT NOTIFICATION] sessionUpdate type: ${sessionUpdate}`);
+      
+      // If currently blocked (awaiting permission), queue all notifications
+      if (this.isBlocked) {
+        console.log(`[ACP] Blocked state - queueing notification: ${sessionUpdate}`);
+        this.notificationQueue.push(msg.params);
+        return;
+      }
       
       // Persist agent message chunks directly to database
-      if (update?.sessionUpdate === "agent_message_chunk") {
+      if (sessionUpdate === "agent_message_chunk") {
         const db = readDb();
         const messages = db.messages.filter(m => m.threadId === this.threadId && m.sender === "agent");
         const lastMsg = messages[messages.length - 1];
@@ -858,54 +941,152 @@ class ACPManager {
         }
       }
       
-      // When a tool is about to be called, emit a tool_call message
-      if (update?.sessionUpdate === "tool_call_started") {
-        const db = readDb();
-        const toolName = update.toolCall?.name || "unknown_tool";
-        const toolType = toolName === "bash" ? "BASH" : toolName.toUpperCase();
-        const toolInput = typeof update.toolCall?.input === 'object' 
-          ? update.toolCall?.input?.command || JSON.stringify(update.toolCall?.input)
-          : update.toolCall?.input || "";
+      // Handle tool_call (ACP sends "tool_call", not "tool_call_started")
+      // This includes both initial tool_call and tool_call_update with results
+      if (sessionUpdate === "tool_call" || sessionUpdate === "tool_call_update") {
+        const isInitialCall = sessionUpdate === "tool_call" && update.status === "pending";
         
-        const toolCallMsg: Message = {
-          id: `msg-toolcall-${Date.now()}-${Math.random()}`,
-          threadId: this.threadId,
-          type: "tool_call" as MessageType,
-          sender: "agent",
-          timestamp: new Date().toISOString(),
-          text: "",
-          toolName: `${toolType}: ${toolInput}`,
-          toolCommand: typeof update.toolCall?.input === 'object' ? JSON.stringify(update.toolCall?.input) : toolInput,
-          logs: null,
-          pendingAction: null
-        };
-        db.messages.push(toolCallMsg);
-        writeDb(db);
-      }
+        if (isInitialCall) {
+          const db = readDb();
+          const toolName = update._meta?.claudeCode?.toolName || update.kind || "unknown_tool";
+          const toolType = toolName.toLowerCase() === "bash" ? "BASH" : toolName.toUpperCase();
+          const toolInput = update.rawInput?.command || 
+                           (typeof update.rawInput === 'object' ? JSON.stringify(update.rawInput) : update.rawInput) || 
+                           "";
+          
+          const toolCallId = `msg-toolcall-${Date.now()}-${Math.random()}`;
+          this.lastToolCallId = toolCallId;
 
-      // When a tool completes, emit a tool_result message
-      if (update?.sessionUpdate === "tool_result") {
-        const db = readDb();
-        const lastToolCall = db.messages
-          .filter(m => m.threadId === this.threadId && m.type === 'tool_call')
-          .slice(-1)[0];
-        
-        const toolResultMsg: Message = {
-          id: `msg-result-${Date.now()}-${Math.random()}`,
-          threadId: this.threadId,
-          type: "tool_result" as MessageType,
-          sender: "agent",
-          timestamp: new Date().toISOString(),
-          text: "",
-          toolCallId: lastToolCall?.id,
-          logs: {
-            command: lastToolCall?.toolCommand || "tool_execution",
-            output: JSON.stringify(update.result || {}, null, 2)
-          },
-          pendingAction: null
-        };
-        db.messages.push(toolResultMsg);
-        writeDb(db);
+          const toolCallMsg: Message = {
+            id: toolCallId,
+            threadId: this.threadId,
+            type: "tool_call" as MessageType,
+            sender: "agent",
+            timestamp: new Date().toISOString(),
+            text: "",
+            toolName: `${toolType}: ${toolInput}`,
+            toolCommand: toolInput,
+            logs: null,
+            pendingAction: null
+          };
+          db.messages.push(toolCallMsg);
+
+          // Check permissions
+          const isAllowed = this.checkPermission(toolInput);
+          console.log(`[TOOL CALL] ${toolType}: ${toolInput} - ${isAllowed ? "AUTO-ALLOWED" : "AWAITING APPROVAL"}`);
+
+          if (isAllowed) {
+            // Auto-approved - no pending action needed, keep processing
+            writeDb(db);
+          } else {
+            // Requires user approval — BLOCK the message stream
+            console.log(`[ACP] BLOCKING message stream pending user approval`);
+            this.isBlocked = true;
+
+            // Emit a security_permission message the UI already knows how to render
+            const permissionMsgId = `msg-permission-${Date.now()}-${Math.random()}`;
+            const permissionMsg: Message = {
+              id: permissionMsgId,
+              threadId: this.threadId,
+              type: "security_permission" as MessageType,
+              sender: "agent",
+              timestamp: new Date().toISOString(),
+              text: "",
+              codeBlock: null,
+              logs: null,
+              pendingAction: {
+                command: toolInput,
+                approved: null
+              }
+            };
+            db.messages.push(permissionMsg);
+            writeDb(db);
+
+            // Set up resolver for UI approval — when called, unblock and resume queue
+            this.pendingToolApproval = {
+              toolCallId,
+              toolName: toolType,
+              toolInput,
+              resolver: (approved: boolean) => {
+                console.log(`[TOOL APPROVAL] ${toolType}: ${toolInput} - ${approved ? "APPROVED" : "REJECTED"}`);
+                
+                if (!approved) {
+                  // Track this tool call as rejected so we can suppress its output
+                  this.rejectedToolCalls.add(update.toolCallId);
+                  console.log(`[REJECTION] Marked tool call ${update.toolCallId} as rejected - will suppress its output`);
+                }
+                
+                const freshDb = readDb();
+                // Update the security_permission message to reflect the decision
+                const permMsg = freshDb.messages.find(m => m.id === permissionMsgId);
+                if (permMsg && permMsg.pendingAction) {
+                  permMsg.pendingAction.approved = approved;
+                }
+                
+                const thread = freshDb.threads.find(t => t.id === this.threadId);
+                if (thread) {
+                  thread.status = approved ? "thinking" : "idle";
+                }
+                
+                writeDb(freshDb);
+                
+                // Unblock and resume message processing
+                this.unblockAndResumeNotifications();
+              }
+            };
+
+            // Mark thread as awaiting permission
+            const thread = db.threads.find(t => t.id === this.threadId);
+            if (thread) {
+              thread.status = "awaiting_permission";
+            }
+            writeDb(db);
+            
+            // RETURN WITHOUT CALLING messageCallback — this pauses the stream
+            return;
+          }
+        } else if (sessionUpdate === "tool_call_update" && update.status === "completed") {
+          // Check if this tool call was rejected — if so, suppress its output and don't persist it
+          if (this.rejectedToolCalls.has(update.toolCallId)) {
+            console.log(`[SUPPRESSION] Suppressing output for rejected tool call ${update.toolCallId}`);
+            // Still call messageCallback but don't persist the result
+            if (this.messageCallback) {
+              this.messageCallback(msg.params);
+            }
+            return;
+          }
+
+          const db = readDb();
+          const lastToolCall = db.messages
+            .filter(m => m.threadId === this.threadId && m.type === 'tool_call')
+            .slice(-1)[0];
+          
+          const toolOutput = update._meta?.claudeCode?.toolResponse?.stdout || 
+                            update.rawOutput || 
+                            JSON.stringify(update, null, 2);
+          
+          const toolResultMsg: Message = {
+            id: `msg-result-${Date.now()}-${Math.random()}`,
+            threadId: this.threadId,
+            type: "tool_result" as MessageType,
+            sender: "agent",
+            timestamp: new Date().toISOString(),
+            text: "",
+            toolCallId: lastToolCall?.id,
+            logs: {
+              command: lastToolCall?.toolCommand || "tool_execution",
+              output: toolOutput
+            },
+            pendingAction: null
+          };
+          db.messages.push(toolResultMsg);
+          
+          // Clear any pending approval
+          this.pendingToolApproval = null;
+          
+          writeDb(db);
+          console.log(`[TOOL RESULT] ${lastToolCall?.toolCommand}: ${toolOutput.substring(0, 100)}`);
+        }
       }
       
       if (this.messageCallback) {
@@ -938,10 +1119,17 @@ class ACPManager {
       
       const isAllowed = this.checkPermission(command);
       if (isAllowed) {
+        console.log(`[PERMISSION] Auto-allowed tool execution: ${command}`);
         // ACP expects an optionId from the options list, not a boolean
         this.sendResponse(req.id, { optionId: "allow" });
       } else {
+        console.log(`[PERMISSION] Tool execution awaiting user approval: ${command}`);
         this.pendingPermissionResolver = (approved: boolean) => {
+          if (approved) {
+            console.log(`[PERMISSION] User approved: ${command}`);
+          } else {
+            console.log(`[PERMISSION] User rejected: ${command}`);
+          }
           this.sendResponse(req.id, { optionId: approved ? "allow" : "reject" });
           this.pendingPermissionResolver = null;
         };
@@ -1051,7 +1239,8 @@ class ACPManager {
     console.log("Creating new ACP session...");
     const sessionResult = await this.sendRequest("session/new", {
       cwd: this.workspacePath,
-      mcpServers: []
+      mcpServers: [],
+      permissionMode: "default"
     });
 
     this.sessionId = sessionResult.sessionId;

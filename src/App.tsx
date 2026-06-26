@@ -156,6 +156,9 @@ export default function App() {
     }
   }, [activeThreadId]);
 
+  const activeThread = threads.find(t => t.id === activeThreadId) || null;
+  const activeThreadStatus = activeThread?.status;
+
   // Polling state helper to update message states or threads status
   useEffect(() => {
     const interval = setInterval(() => {
@@ -165,9 +168,9 @@ export default function App() {
       if (activeWorkspaceId) {
         fetchThreads(activeWorkspaceId);
       }
-    }, 4000);
+    }, activeThreadStatus === 'awaiting_permission' || activeThreadStatus === 'thinking' ? 1000 : 4000);
     return () => clearInterval(interval);
-  }, [activeThreadId, activeWorkspaceId]);
+  }, [activeThreadId, activeWorkspaceId, activeThreadStatus]);
 
   // Handle Workspace creation
   const handleCreateWorkspace = async (e: React.FormEvent) => {
@@ -372,8 +375,6 @@ export default function App() {
     );
     setSearchResult(filtered);
   }, [searchQuery]);
-
-  const activeThread = threads.find(t => t.id === activeThreadId) || null;
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#0B0B0C] text-[#e4e2e4] font-sans antialiased">
