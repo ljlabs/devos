@@ -317,11 +317,11 @@ app.post("/api/threads/:threadId/respond", async (req, res) => {
 
   const agent = ClaudeAgent.getInstance(threadId, ensureWorkspace(thread.workspaceId, thread.workspaceId));
 
-  // Send exactly what ACP expects: { selected: { optionId } }
+  // Send exactly what ACP expects
   agent.send({
     jsonrpc: "2.0",
     id: thread.pendingPermissionId,
-    result: { selected: { optionId } },
+    result: { outcome: { outcome: "selected", optionId } },
   });
 
   updateDb((db) => {
