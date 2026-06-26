@@ -401,13 +401,33 @@ export default function ChatCanvas({
                 }
               );
               
+              // Look ahead for permission response that answers this tool
+              const permissionMsg = messages.find(
+                (m, idx) => idx > currentMsgIdx && m.type === "permission_response"
+              );
+              const permissionApproved = permissionMsg && permissionMsg.raw?.selected?.optionId?.includes("allow");
+              const permissionRejected = permissionMsg && !permissionMsg.raw?.selected?.optionId?.includes("allow");
+              const hasApproval = permissionApproved || permissionRejected;
+              
               const hasResult = !!resultMsg;
               const isExpanded = expandedToolId === toolCallId;
 
               return (
                 <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text">
-                  <div className="w-8 h-8 bg-slate-500/20 border border-slate-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(100,116,139,0.15)] select-none">
-                    {hasResult ? (
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(100,116,139,0.15)] select-none border ${
+                    hasApproval
+                      ? permissionApproved
+                        ? "bg-emerald-500/20 border-emerald-500/40"
+                        : "bg-red-500/20 border-red-500/40"
+                      : "bg-slate-500/20 border-slate-500/40"
+                  }`}>
+                    {hasApproval ? (
+                      permissionApproved ? (
+                        <CheckCircle2 size={16} className="text-emerald-400" />
+                      ) : (
+                        <XCircle size={16} className="text-red-400" />
+                      )
+                    ) : hasResult ? (
                       <Terminal size={16} className="text-emerald-400" />
                     ) : (
                       <Zap size={16} className="text-slate-400 animate-pulse" />
@@ -423,11 +443,27 @@ export default function ChatCanvas({
                         }`}
                         disabled={!hasResult}
                       >
-                        <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
-                          {kind?.toUpperCase() || "TOOL"}: {title || "pending…"}
-                        </span>
+                        <div className="flex items-center gap-2 flex-1">
+                          <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                            {kind?.toUpperCase() || "TOOL"}: {title || "pending…"}
+                          </span>
+                          {hasApproval && (
+                            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
+                              permissionApproved
+                                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                : "bg-red-500/20 text-red-300 border border-red-500/30"
+                            }`}>
+                              {permissionApproved ? "✓ Approved" : "✗ Rejected"}
+                            </span>
+                          )}
+                          {permissionMsg && (
+                            <span className="text-[10px] text-slate-500 font-mono ml-auto">
+                              {new Date(permissionMsg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          )}
+                        </div>
                         {hasResult && (
-                          <div className="text-slate-500 text-xs">
+                          <div className="text-slate-500 text-xs ml-2">
                             {isExpanded ? "▼ Hide output" : "▶ Show output"}
                           </div>
                         )}
@@ -499,120 +535,16 @@ export default function ChatCanvas({
               );
             }
 
-            // Permission request
+            // Permission request - hide since approval status is now shown inline with tool calls
             if (parsed.type === "permission") {
-              const { toolCall, options, permissionId } = parsed.content;
-              
-              // Look ahead for a permission_response that answers this request
-              const currentMsgIdx = messages.indexOf(msg);
-              const hasResponse = messages.slice(currentMsgIdx + 1).some(
-                (m) => {
-                  // Check if this is a permission_response message type
-                  if (m.type === "permission_response") {
-                    return true;
-                  }
-                  // Also check raw.type in case message type isn't set
-                  return m.raw?.type === "permission_response" && m.raw?.selected?.optionId;
-                }
-              );
-              
-              // Hide permission bubble if it's already been responded to
-              if (hasResponse) {
-                return null;
-              }
-              
-              return (
-                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text max-w-[90%]">
-                  <div className="w-8 h-8 bg-amber-500/20 border border-amber-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(245,158,11,0.15)] select-none" />
-                  <div className="flex-1">
-                    <div className="border-2 border-amber-500/30 bg-amber-500/5 p-4 rounded-xl flex flex-col gap-4 shadow-[0_8px_30px_rgba(0,0,0,0.5)] animate-pulse border-dashed">
-                      <div>
-                        <h4 className="text-sm font-bold text-amber-100 font-sans">Permission Required</h4>
-                        <p className="text-[11px] text-amber-500/80 font-mono mt-1">
-                          {toolCall?.title || "Tool execution requested"}
-                        </p>
-                        {toolCall?.kind && (
-                          <p className="text-[10px] text-amber-400/60 font-mono mt-0.5">
-                            Kind: {toolCall.kind}
-                          </p>
-                        )}
-                        {toolCall?.locations?.[0]?.path && (
-                          <p className="text-[10px] text-amber-400/60 font-mono mt-0.5 truncate">
-                            Path: {toolCall.locations[0].path}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2 select-none shrink-0 flex-wrap">
-                        {options?.map((opt: any) => (
-                          <button
-                            key={opt.optionId}
-                            onClick={() => onPermissionResponse(opt.optionId)}
-                            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
-                              opt.kind === "allow_always"
-                                ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.3)]"
-                                : opt.kind === "allow_once"
-                                ? "bg-amber-500 hover:bg-amber-400 text-black"
-                                : "bg-transparent hover:bg-white/5 border border-white/10 text-white"
-                            }`}
-                          >
-                            {opt.name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
+              // Permission requests are now handled inline with tool UI, skip rendering
+              return null;
             }
 
-            // Permission response (user's approval/denial choice)
+            // Permission response (user's approval/denial choice) - now embedded in tool UI
             if (parsed.type === "permission_response") {
-              const optionId = parsed.content;
-              const optionNames: { [key: string]: string } = {
-                "allow_always": "✓ Allow Always",
-                "allow": "✓ Allow",
-                "allow_once": "✓ Allow",
-                "reject": "✗ Reject",
-                "reject_once": "✗ Reject",
-              };
-              
-              return (
-                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text max-w-[90%]">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 select-none border ${
-                    optionId?.includes("allow") 
-                      ? "bg-emerald-500/20 border-emerald-500/40 shadow-[0_0_15px_rgba(16,185,129,0.15)]" 
-                      : "bg-red-500/20 border-red-500/40 shadow-[0_0_15px_rgba(239,68,68,0.15)]"
-                  }`}>
-                    {optionId?.includes("allow") 
-                      ? <CheckCircle2 size={16} className="text-emerald-400" />
-                      : <XCircle size={16} className="text-red-400" />
-                    }
-                  </div>
-                  <div className="flex-1">
-                    <div className={`border rounded-xl p-3 ${
-                      optionId?.includes("allow")
-                        ? "border-emerald-500/30 bg-emerald-500/5"
-                        : "border-red-500/30 bg-red-500/5"
-                    }`}>
-                      <p className={`text-sm font-semibold font-sans ${
-                        optionId?.includes("allow")
-                          ? "text-emerald-300"
-                          : "text-red-300"
-                      }`}>
-                        {optionNames[optionId] || optionId}
-                      </p>
-                      <p className={`text-[11px] mt-1 font-mono ${
-                        optionId?.includes("allow")
-                          ? "text-emerald-500/70"
-                          : "text-red-500/70"
-                      }`}>
-                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              );
+              // Skip rendering - permission responses are now shown inline with tool calls
+              return null;
             }
 
             // Tool event (call, result, status)
