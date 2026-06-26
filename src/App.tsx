@@ -242,6 +242,7 @@ export default function App() {
     const tempUserMsg: Message = {
       id: `temp-${Date.now()}`,
       threadId: activeThreadId,
+      type: "user_message",
       sender: "user",
       timestamp: new Date().toISOString(),
       text: messageText,

@@ -179,9 +179,13 @@ export default function ChatCanvas({
           </div>
         ) : (
           messages.map((msg) => {
-            const isUser = msg.sender === "user";
-            
-            if (isUser) {
+            // Skip tool_call messages - they're rendered with their tool_result
+            if (msg.type === 'tool_call') {
+              return null;
+            }
+
+            // Render user messages
+            if (msg.type === 'user_message') {
               return (
                 <div key={msg.id} className="flex justify-end max-w-4xl mx-auto w-full group animate-fadeIn select-text">
                   <div className="max-w-[80%] bg-[#18181B] border border-white/5 p-4 rounded-2xl rounded-tr-none">
@@ -196,90 +200,116 @@ export default function ChatCanvas({
               );
             }
 
-            return (
-              <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text">
-                <div className="w-8 h-8 bg-emerald-500/20 border border-emerald-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.15)] select-none">
-                  <Bot size={16} className="text-emerald-400" />
-                </div>
-                <div className="flex-1 space-y-4 max-w-[90%]">
-                  <div className="bg-[#0E0E11] border border-white/5 p-5 rounded-2xl rounded-tl-none relative">
-                    <div className="flex items-center justify-between pb-2 mb-3 border-b border-white/5 select-none text-[10px] font-mono tracking-widest text-emerald-400 font-bold">
-                      <span>CLAUDE AI AGENT</span>
-                      <span className="text-slate-500 font-normal">
-                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-                    
-                    <p className="text-sm text-slate-300 leading-relaxed">
-                      {msg.text}
-                    </p>
-
-                    {/* Code block change preview (if attached) */}
-                    {msg.codeBlock && (
-                      <div className="code-block bg-black/40 border border-white/10 rounded-lg overflow-hidden mt-4 select-text">
-                        <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-b border-white/10 select-none">
-                          <span className="text-[11px] font-mono text-slate-400">
-                            {msg.codeBlock.filePath}
-                          </span>
-                          <span className="text-[10px] text-slate-500 uppercase font-bold">Modified</span>
-                        </div>
-                        <div className="relative">
-                          <pre className="p-4 overflow-x-auto font-mono text-xs text-slate-300 custom-scrollbar bg-black/20 leading-relaxed max-h-96">
-                            <code>{msg.codeBlock.content}</code>
-                          </pre>
-                          <button 
-                            onClick={() => handleCopyCode(msg.codeBlock!.content, msg.id)}
-                            className="absolute right-3 top-3 flex items-center gap-1.5 text-[10px] font-mono bg-black/60 border border-white/5 hover:border-white/20 text-slate-400 hover:text-white px-2 py-1 rounded transition-colors cursor-pointer select-none"
-                          >
-                            {copiedFile === msg.id ? (
-                              <>
-                                <Check size={11} className="text-emerald-400" />
-                                <span className="text-emerald-400">Copied</span>
-                              </>
-                            ) : (
-                              <>
-                                <Copy size={11} />
-                                <span>Copy</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
+            // Render agent messages
+            if (msg.type === 'agent_message') {
+              return (
+                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text">
+                  <div className="w-8 h-8 bg-emerald-500/20 border border-emerald-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.15)] select-none">
+                    <Bot size={16} className="text-emerald-400" />
+                  </div>
+                  <div className="flex-1 max-w-[90%]">
+                    <div className="bg-[#0E0E11] border border-white/5 p-5 rounded-2xl rounded-tl-none relative">
+                      <div className="flex items-center justify-between pb-2 mb-3 border-b border-white/5 select-none text-[10px] font-mono tracking-widest text-emerald-400 font-bold">
+                        <span>CLAUDE AI AGENT</span>
+                        <span className="text-slate-500 font-normal">
+                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
                       </div>
-                    )}
+                      
+                      <p className="text-sm text-slate-300 leading-relaxed">
+                        {msg.text}
+                      </p>
 
-                    {/* Collapsible terminal command logs (if attached) */}
-                    {msg.logs && (
-                      <div className="border border-white/5 rounded-lg overflow-hidden bg-black/40 mt-4">
-                        <button 
-                          onClick={() => setExpandedLogId(expandedLogId === msg.id ? null : msg.id)}
-                          className="w-full flex items-center justify-between px-4 py-2 hover:bg-white/5 transition-colors select-none text-left"
-                        >
-                          <div className="flex items-center gap-2">
-                            <Terminal size={14} className="text-slate-400" />
+                      {/* Code block change preview (if attached) */}
+                      {msg.codeBlock && (
+                        <div className="code-block bg-black/40 border border-white/10 rounded-lg overflow-hidden mt-4 select-text">
+                          <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-b border-white/10 select-none">
+                            <span className="text-[11px] font-mono text-slate-400">
+                              {msg.codeBlock.filePath}
+                            </span>
+                            <span className="text-[10px] text-slate-500 uppercase font-bold">Modified</span>
+                          </div>
+                          <div className="relative">
+                            <pre className="p-4 overflow-x-auto font-mono text-xs text-slate-300 custom-scrollbar bg-black/20 leading-relaxed max-h-96">
+                              <code>{msg.codeBlock.content}</code>
+                            </pre>
+                            <button 
+                              onClick={() => handleCopyCode(msg.codeBlock!.content, msg.id)}
+                              className="absolute right-3 top-3 flex items-center gap-1.5 text-[10px] font-mono bg-black/60 border border-white/5 hover:border-white/20 text-slate-400 hover:text-white px-2 py-1 rounded transition-colors cursor-pointer select-none"
+                            >
+                              {copiedFile === msg.id ? (
+                                <>
+                                  <Check size={11} className="text-emerald-400" />
+                                  <span className="text-emerald-400">Copied</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy size={11} />
+                                  <span>Copy</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            // Render tool result messages (grouped with tool call)
+            if (msg.type === 'tool_result') {
+              // Find the corresponding tool_call to get the command and tool type
+              const toolCall = messages.find(m => m.type === 'tool_call' && m.id === msg.toolCallId);
+              const toolType = toolCall?.toolName?.split(':')[0] || 'BASH';
+              const toolCommand = toolCall?.toolCommand || msg.logs?.command || 'tool_execution';
+              
+              return (
+                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text">
+                  <div className="w-8 h-8 bg-slate-500/20 border border-slate-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(100,116,139,0.15)] select-none">
+                    <Terminal size={16} className="text-slate-400" />
+                  </div>
+                  <div className="flex-1 max-w-[90%]">
+                    <div className="border border-white/5 rounded-lg overflow-hidden bg-black/40">
+                      <button 
+                        onClick={() => setExpandedLogId(expandedLogId === msg.id ? null : msg.id)}
+                        className="w-full flex items-center justify-between px-4 py-2 hover:bg-white/5 transition-colors select-none text-left bg-[#0E0E11]"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Terminal size={14} className="text-slate-400" />
+                          <div className="flex flex-col gap-0.5">
                             <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
-                              System Logs: {msg.logs.command}
+                              {toolType}: {toolCommand}
                             </span>
                           </div>
-                          {expandedLogId === msg.id ? (
-                            <ChevronUp size={14} className="text-slate-500" />
-                          ) : (
-                            <ChevronDown size={14} className="text-slate-500" />
-                          )}
-                        </button>
-                        
-                        {expandedLogId === msg.id && (
-                          <div className="p-4 border-t border-white/10 bg-black/95 select-text">
-                            <pre className="font-mono text-xs text-slate-400 leading-relaxed overflow-x-auto custom-scrollbar">
-                              {msg.logs.output}
-                            </pre>
-                          </div>
+                        </div>
+                        {expandedLogId === msg.id ? (
+                          <ChevronUp size={14} className="text-slate-500" />
+                        ) : (
+                          <ChevronDown size={14} className="text-slate-500" />
                         )}
-                      </div>
-                    )}
+                      </button>
+                      
+                      {expandedLogId === msg.id && msg.logs && (
+                        <div className="p-4 border-t border-white/10 bg-black/95 select-text">
+                          <pre className="font-mono text-xs text-slate-400 leading-relaxed overflow-x-auto custom-scrollbar">
+                            {msg.logs.output}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
                   </div>
+                </div>
+              );
+            }
 
-                  {/* Interactive Security Action required prompt (if attached) */}
-                  {msg.pendingAction && (
+            // Render security permission messages
+            if (msg.type === 'security_permission') {
+              return (
+                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text max-w-[90%]">
+                  <div className="w-8 h-8 bg-amber-500/20 border border-amber-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(245,158,11,0.15)] select-none" />
+                  <div className="flex-1">
                     <div className="border-2 border-amber-500/30 bg-amber-500/5 p-4 rounded-xl flex items-center justify-between shadow-[0_8px_30px_rgba(0,0,0,0.5)] animate-pulse border-dashed">
                       <div className="flex items-center gap-4 pr-4">
                         <div className="w-10 h-10 bg-amber-500/20 rounded-full flex items-center justify-center text-amber-500 select-none shrink-0">
@@ -288,12 +318,12 @@ export default function ChatCanvas({
                         <div>
                           <h4 className="text-sm font-bold text-amber-100 font-sans">Security Permission Required</h4>
                           <p className="text-[11px] text-amber-500/80 font-mono mt-0.5">
-                            execute_command: {msg.pendingAction.command}
+                            execute_command: {msg.pendingAction?.command}
                           </p>
                         </div>
                       </div>
 
-                      {msg.pendingAction.approved === null ? (
+                      {msg.pendingAction?.approved === null ? (
                         <div className="flex items-center gap-2 select-none shrink-0">
                           <button 
                             onClick={onDenyAction}
@@ -317,7 +347,7 @@ export default function ChatCanvas({
                             Trust
                           </button>
                         </div>
-                      ) : msg.pendingAction.approved === true ? (
+                      ) : msg.pendingAction?.approved === true ? (
                         <div className="flex items-center gap-2 text-xs font-mono text-emerald-400 select-none bg-emerald-950/20 border border-emerald-500/20 py-2 px-3 rounded-lg shrink-0">
                           <CheckCircle2 size={14} />
                           <span>Approved & Executed</span>
@@ -329,10 +359,13 @@ export default function ChatCanvas({
                         </div>
                       )}
                     </div>
-                  )}
+                  </div>
                 </div>
-              </div>
-            );
+              );
+            }
+
+            // Fallback for unknown types
+            return null;
           })
         )}
 

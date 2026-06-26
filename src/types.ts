@@ -40,15 +40,29 @@ export interface PendingAction {
   approved: boolean | null; // null: pending, true: approved, false: denied
 }
 
+export type MessageType = 'user_message' | 'agent_message' | 'tool_call' | 'tool_result' | 'security_permission';
+
 export interface Message {
   id: string;
   threadId: string;
+  type: MessageType;
   sender: 'user' | 'agent';
   timestamp: string;
   text: string;
-  codeBlock: CodeBlock | null;
-  logs: LogsInfo | null;
-  pendingAction: PendingAction | null;
+  
+  // For user_message and agent_message
+  codeBlock?: CodeBlock | null;
+  
+  // For tool_call
+  toolName?: string;
+  toolCommand?: string;
+  
+  // For tool_result
+  logs?: LogsInfo | null;
+  toolCallId?: string; // Links to the tool_call message
+  
+  // For security_permission
+  pendingAction?: PendingAction | null;
 }
 
 export interface SecurityRule {

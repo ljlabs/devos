@@ -9,7 +9,7 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
-import { DatabaseSchema, Workspace, Thread, Message, SecurityRule } from "./src/types";
+import { DatabaseSchema, Workspace, Thread, Message, SecurityRule, MessageType } from "./src/types";
 
 dotenv.config();
 
@@ -86,6 +86,7 @@ const defaultDb: DatabaseSchema = {
     {
       id: "msg-1",
       threadId: "thread-refactor",
+      type: "user_message" as MessageType,
       sender: "user",
       timestamp: new Date(Date.now() - 120000).toISOString(),
       text: "Hey Claude, can you clean up the routes in `/src/api/routes.js`? The GET endpoints are getting cluttered and I want to separate the logic into a controller.",
@@ -96,6 +97,7 @@ const defaultDb: DatabaseSchema = {
     {
       id: "msg-2",
       threadId: "thread-refactor",
+      type: "agent_message" as MessageType,
       sender: "agent",
       timestamp: new Date(Date.now() - 90000).toISOString(),
       text: "I've analyzed the current structure. I'll move the business logic into `UserController.js` and update the routes file. Here is the proposed change for the router file:",
@@ -103,10 +105,42 @@ const defaultDb: DatabaseSchema = {
         filePath: "src/api/routes.js",
         content: `// Old messy inline routes removed\nrouter.get('/users', UserController.getAllUsers);\nrouter.get('/users/:id', UserController.getUserById);\nrouter.post('/users/register', UserController.createUser);\n\n// New controller-based approach applied...`
       },
+      logs: null,
+      pendingAction: null
+    },
+    {
+      id: "msg-3",
+      threadId: "thread-refactor",
+      type: "tool_call" as MessageType,
+      sender: "agent",
+      timestamp: new Date(Date.now() - 80000).toISOString(),
+      text: "",
+      toolName: "npm run lint",
+      toolCommand: "npm run lint",
+      logs: null,
+      pendingAction: null
+    },
+    {
+      id: "msg-4",
+      threadId: "thread-refactor",
+      type: "tool_result" as MessageType,
+      sender: "agent",
+      timestamp: new Date(Date.now() - 75000).toISOString(),
+      text: "",
+      toolCallId: "msg-3",
       logs: {
         command: "npm run lint",
         output: `> dev-workspace@2.4.0 lint\n> eslint . --ext .js,.jsx,.ts,.tsx\n\n/src/api/routes.js\n  14:5  warning  'express' is defined but never used  no-unused-vars\n  32:12 warning  'req' is defined but never used      no-unused-vars\n\n✖ 0 errors, 2 warnings`
       },
+      pendingAction: null
+    },
+    {
+      id: "msg-5",
+      threadId: "thread-refactor",
+      type: "security_permission" as MessageType,
+      sender: "agent",
+      timestamp: new Date(Date.now() - 60000).toISOString(),
+      text: "",
       pendingAction: {
         command: "rm -rf dist && npm run build",
         approved: null
@@ -565,13 +599,13 @@ app.post("/api/threads/:threadId/approve", async (req, res) => {
 
   // Find the last message that has a pendingAction
   const threadMessages = db.messages.filter(m => m.threadId === threadId);
-  const agentMessagesWithPending = threadMessages.filter(m => m.sender === "agent" && m.pendingAction !== null);
+  const permissionMsgs = threadMessages.filter(m => m.type === 'security_permission' && m.pendingAction !== null);
   
-  if (agentMessagesWithPending.length === 0) {
+  if (permissionMsgs.length === 0) {
     return res.status(400).json({ error: "No pending action found for this thread" });
   }
   
-  const lastMsg = agentMessagesWithPending[agentMessagesWithPending.length - 1];
+  const lastMsg = permissionMsgs[permissionMsgs.length - 1];
   if (lastMsg.pendingAction) {
     lastMsg.pendingAction.approved = true;
   }
@@ -611,13 +645,29 @@ app.post("/api/threads/:threadId/approve", async (req, res) => {
     if (t) {
       t.status = "idle";
       
-      const successMsg: Message = {
-        id: `msg-${Date.now()}`,
+      // Emit tool_call message
+      const toolCallMsg: Message = {
+        id: `msg-toolcall-${Date.now()}`,
         threadId,
+        type: "tool_call" as MessageType,
         sender: "agent",
         timestamp: new Date().toISOString(),
-        text: `Command \`${commandToRun}\` has been executed inside the workspace sandbox container. Standard CLI process outputs are recorded below.`,
-        codeBlock: null,
+        text: "",
+        toolName: "BASH: " + commandToRun.split(' ')[0],
+        toolCommand: commandToRun,
+        logs: null,
+        pendingAction: null
+      };
+      
+      // Emit tool_result message
+      const toolResultMsg: Message = {
+        id: `msg-result-${Date.now()}`,
+        threadId,
+        type: "tool_result" as MessageType,
+        sender: "agent",
+        timestamp: new Date(Date.now() + 100).toISOString(),
+        text: "",
+        toolCallId: toolCallMsg.id,
         logs: {
           command: commandToRun,
           output: output
@@ -625,7 +675,8 @@ app.post("/api/threads/:threadId/approve", async (req, res) => {
         pendingAction: null
       };
       
-      updatedDb.messages.push(successMsg);
+      updatedDb.messages.push(toolCallMsg);
+      updatedDb.messages.push(toolResultMsg);
       writeDb(updatedDb);
     }
   }, 1000);
@@ -644,13 +695,13 @@ app.post("/api/threads/:threadId/deny", (req, res) => {
   }
 
   const threadMessages = db.messages.filter(m => m.threadId === threadId);
-  const agentMessagesWithPending = threadMessages.filter(m => m.sender === "agent" && m.pendingAction !== null);
+  const permissionMsgs = threadMessages.filter(m => m.type === 'security_permission' && m.pendingAction !== null);
   
-  if (agentMessagesWithPending.length === 0) {
+  if (permissionMsgs.length === 0) {
     return res.status(400).json({ error: "No pending action found for this thread" });
   }
   
-  const lastMsg = agentMessagesWithPending[agentMessagesWithPending.length - 1];
+  const lastMsg = permissionMsgs[permissionMsgs.length - 1];
   if (lastMsg.pendingAction) {
     lastMsg.pendingAction.approved = false;
   }
@@ -673,6 +724,7 @@ app.post("/api/threads/:threadId/deny", (req, res) => {
   const cancelMsg: Message = {
     id: `msg-${Date.now()}`,
     threadId,
+    type: "agent_message" as MessageType,
     sender: "agent",
     timestamp: new Date().toISOString(),
     text: `Understood. The execution of terminal command \`${lastMsg.pendingAction?.command}\` was denied by safety gatekeeping. Refusing to run. Please let me know what alternative changes we should apply.`,
@@ -806,6 +858,56 @@ class ACPManager {
         }
       }
       
+      // When a tool is about to be called, emit a tool_call message
+      if (update?.sessionUpdate === "tool_call_started") {
+        const db = readDb();
+        const toolName = update.toolCall?.name || "unknown_tool";
+        const toolType = toolName === "bash" ? "BASH" : toolName.toUpperCase();
+        const toolInput = typeof update.toolCall?.input === 'object' 
+          ? update.toolCall?.input?.command || JSON.stringify(update.toolCall?.input)
+          : update.toolCall?.input || "";
+        
+        const toolCallMsg: Message = {
+          id: `msg-toolcall-${Date.now()}-${Math.random()}`,
+          threadId: this.threadId,
+          type: "tool_call" as MessageType,
+          sender: "agent",
+          timestamp: new Date().toISOString(),
+          text: "",
+          toolName: `${toolType}: ${toolInput}`,
+          toolCommand: typeof update.toolCall?.input === 'object' ? JSON.stringify(update.toolCall?.input) : toolInput,
+          logs: null,
+          pendingAction: null
+        };
+        db.messages.push(toolCallMsg);
+        writeDb(db);
+      }
+
+      // When a tool completes, emit a tool_result message
+      if (update?.sessionUpdate === "tool_result") {
+        const db = readDb();
+        const lastToolCall = db.messages
+          .filter(m => m.threadId === this.threadId && m.type === 'tool_call')
+          .slice(-1)[0];
+        
+        const toolResultMsg: Message = {
+          id: `msg-result-${Date.now()}-${Math.random()}`,
+          threadId: this.threadId,
+          type: "tool_result" as MessageType,
+          sender: "agent",
+          timestamp: new Date().toISOString(),
+          text: "",
+          toolCallId: lastToolCall?.id,
+          logs: {
+            command: lastToolCall?.toolCommand || "tool_execution",
+            output: JSON.stringify(update.result || {}, null, 2)
+          },
+          pendingAction: null
+        };
+        db.messages.push(toolResultMsg);
+        writeDb(db);
+      }
+      
       if (this.messageCallback) {
         this.messageCallback(msg.params);
       }
@@ -856,6 +958,7 @@ class ACPManager {
           lastMsg = {
             id: `msg-agent-${Date.now()}`,
             threadId: this.threadId,
+            type: "agent_message" as MessageType,
             sender: "agent",
             timestamp: new Date().toISOString(),
             text: `The agent is requesting permission to run a sensitive command.`,
@@ -996,6 +1099,7 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
   const userMsg: Message = {
     id: `msg-user-${Date.now()}`,
     threadId,
+    type: "user_message" as MessageType,
     sender: "user",
     timestamp: new Date().toISOString(),
     text,
@@ -1015,6 +1119,7 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
   const agentMsg: Message = {
     id: agentMsgId,
     threadId,
+    type: "agent_message" as MessageType,
     sender: "agent",
     timestamp: new Date().toISOString(),
     text: "Initializing Claude Agent...",
