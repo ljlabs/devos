@@ -12,6 +12,8 @@
  */
 
 import React, { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Terminal,
   Bot,
@@ -32,6 +34,30 @@ import {
   Square
 } from "lucide-react";
 import { Message, Thread } from "../types";
+
+/** Renders markdown content with dark-theme styling for agent bubbles */
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <div className="prose prose-invert prose-sm max-w-none
+      prose-headings:text-slate-200 prose-headings:font-semibold
+      prose-p:text-slate-300 prose-p:leading-relaxed
+      prose-a:text-emerald-400 prose-a:no-underline hover:prose-a:underline
+      prose-strong:text-slate-200 prose-strong:font-semibold
+      prose-code:text-emerald-400 prose-code:bg-white/5 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:font-mono prose-code:before:content-none prose-code:after:content-none
+      prose-pre:bg-black/60 prose-pre:border prose-pre:border-white/5 prose-pre:rounded-lg
+      prose-lead:text-slate-300
+      prose-li:text-slate-300
+      prose-td:text-slate-300 prose-th:text-slate-200 prose-th:font-semibold
+      prose-thead:border-b prose-thead:border-white/10
+      prose-table:border-collapse prose-td:border prose-td:border-white/5 prose-th:border prose-th:border-white/5
+      prose-blockquote:border-emerald-500/30 prose-blockquote:text-slate-400 prose-blockquote:italic
+      prose-hr:border-white/10
+      prose-img:rounded-lg
+    ">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    </div>
+  );
+}
 
 interface ChatCanvasProps {
   activeThread: Thread | null;
@@ -369,9 +395,7 @@ export default function ChatCanvas({
                           {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
-                      <p className="text-sm text-slate-300 leading-relaxed">
-                        {textContent}
-                      </p>
+                      <MarkdownContent content={textContent} />
                     </div>
                   </div>
                 </div>
@@ -395,9 +419,7 @@ export default function ChatCanvas({
                           {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
-                      <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
-                        {parsed.content}
-                      </p>
+                      <MarkdownContent content={parsed.content} />
                     </div>
                   </div>
                 </div>
@@ -697,9 +719,7 @@ export default function ChatCanvas({
                           {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
-                      <p className="text-sm text-slate-300 leading-relaxed">
-                        {textContent}
-                      </p>
+                      <MarkdownContent content={textContent} />
                     </div>
                   </div>
                 </div>
@@ -723,9 +743,7 @@ export default function ChatCanvas({
                           {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
-                      <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
-                        {parsed.content}
-                      </p>
+                      <MarkdownContent content={parsed.content} />
                     </div>
                   </div>
                 </div>
