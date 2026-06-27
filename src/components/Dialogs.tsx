@@ -127,21 +127,20 @@ export function NewThreadModal({
         <form onSubmit={onSubmit} className="p-6 space-y-4">
           <div className="flex items-center gap-2 text-white pb-2 border-b border-white/5 select-none">
             <MessageSquarePlus size={18} className="text-emerald-400" />
-            <h3 className="text-base font-bold font-sans">Initialize Sub-task Thread</h3>
+            <h3 className="text-base font-bold font-sans">Initialize Claude ACP Thread</h3>
           </div>
 
           <p className="text-xs text-slate-400 font-sans leading-relaxed">
-            Each thread represents an isolated Claude Code sub-task process wrapper. Start a clean conversational context.
+            Start a new Claude agent session in the current workspace. The thread title will auto-update from the agent's session info.
           </p>
 
           <div className="space-y-3 pt-2">
             <div>
               <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-widest mb-1.5">
-                Thread Subject / Goal
+                Thread Title (Optional)
               </label>
               <input
                 type="text"
-                required
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="e.g. Refactor Auth Router, Setup unit tests"

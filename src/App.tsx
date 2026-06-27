@@ -187,13 +187,16 @@ export default function App() {
   // Handle Thread creation
   const handleCreateThread = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newThreadTitle.trim() || !activeWorkspaceId) return;
+    if (!activeWorkspaceId) return;
+    // Title is optional now - will be auto-set from ACP session_info_update
 
     try {
       const res = await fetch(`/api/workspaces/${activeWorkspaceId}/threads`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: newThreadTitle })
+        body: JSON.stringify({ 
+          title: newThreadTitle || "Untitled"
+        })
       });
       if (res.ok) {
         const data = await res.json();
@@ -202,7 +205,7 @@ export default function App() {
         
         // Log activity
         setGlobalLogs(prev => [
-          `[${new Date().toLocaleTimeString()}] Initialized Claude ACP process thread '${newThreadTitle}'`,
+          `[${new Date().toLocaleTimeString()}] Initialized Claude ACP process thread`,
           ...prev
         ]);
         

@@ -129,6 +129,11 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
           thread.pendingPermissionId = raw.id;
           thread.pendingPermissionOptions = raw.params?.options ?? [];
         } else if (raw.method === "session/update") {
+          // Auto-update thread title from session_info_update
+          const update = raw.params?.update;
+          if (update?.sessionUpdate === "session_info_update" && update?.title) {
+            thread.title = update.title;
+          }
           // After tool execution completes, permission is no longer pending
           thread.status = "idle";
           thread.pendingPermissionId = undefined;
@@ -179,12 +184,12 @@ app.get("/api/workspaces/:workspaceId/threads", (req, res) => {
 app.post("/api/workspaces/:workspaceId/threads", (req, res) => {
   const { workspaceId } = req.params;
   const { title } = req.body;
-  if (!title) return res.status(400).json({ error: "title required" });
+  // title is optional now - will be set from ACP session_info_update
 
   const thread: Thread = {
     id: `thread-${Date.now()}`,
     workspaceId,
-    title,
+    title: title || "Untitled", // placeholder until ACP sets it
     status: "idle",
   };
   updateDb((db) => db.threads.push(thread));
@@ -225,7 +230,9 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
   const thread = db.threads.find((t) => t.id === threadId);
   if (!thread) return res.status(404).json({ error: "thread not found" });
 
-  const wsPath = ensureWorkspace(thread.workspaceId, thread.workspaceId);
+  // Look up the workspace to get its path
+  const workspace = db.workspaces.find((ws) => ws.id === thread.workspaceId);
+  const wsPath = workspace?.path || thread.workspaceId;
 
   // Persist user message as raw ACP-style object
   const userMsg: Message = {
@@ -315,7 +322,9 @@ app.post("/api/threads/:threadId/respond", async (req, res) => {
     return res.status(400).json({ error: "no pending permission" });
   }
 
-  const wsPath = ensureWorkspace(thread.workspaceId, thread.workspaceId);
+  // Look up the workspace to get its path
+  const workspace = db.workspaces.find((ws) => ws.id === thread.workspaceId);
+  const wsPath = workspace?.path || thread.workspaceId;
   const agent = ClaudeAgent.getInstance(threadId, wsPath);
   wireAgent(agent, threadId);
 
