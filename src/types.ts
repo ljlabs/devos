@@ -15,7 +15,7 @@ export interface Thread {
   title: string;
   sessionId?: string;
   status: 'thinking' | 'running' | 'awaiting_permission' | 'idle';
-  
+
   // Current permission request (from ACP) — populated when ACP sends session/request_permission
   pendingPermissionId?: number;
   pendingPermissionOptions?: Array<{
@@ -23,6 +23,9 @@ export interface Thread {
     name: string;
     optionId: string;
   }>;
+
+  // Non-end_turn stopReason from last turn (e.g. "error", "cancelled")
+  lastError?: string;
 }
 
 export type ACPMessageMethod = 

@@ -21,6 +21,7 @@ import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { ClaudeAgent } from "./claudeAgent";
 import { DatabaseSchema, Workspace, Thread, Message } from "./src/types";
+import { logInfo, logError, getLogs } from "./src/logger";
 
 dotenv.config();
 
@@ -37,9 +38,9 @@ app.use(express.json());
 
 const defaultDb: DatabaseSchema = {
   workspaces: [
-    { id: "ws-auth", name: "frontend-auth", path: "/Users/developer/projects/frontend-auth" },
-    { id: "ws-api",  name: "api-gateway",   path: "/Users/developer/projects/api-gateway" },
-    { id: "ws-docs", name: "docs-site",      path: "/Users/developer/projects/docs-site" },
+    { id: "ws-auth", name: "frontend-auth", path: path.join(WORKSPACES_DIR, "ws-auth") },
+    { id: "ws-api",  name: "api-gateway",   path: path.join(WORKSPACES_DIR, "ws-api") },
+    { id: "ws-docs", name: "docs-site",      path: path.join(WORKSPACES_DIR, "ws-docs") },
   ],
   threads: [],
   messages: [],
@@ -72,6 +73,17 @@ function newId(prefix: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// In-memory cancel flags
+//
+// The cancel route may arrive while a thread's async handler is still inside
+// agent.initialize() (e.g. waiting for session/new). Since there's no session
+// yet to cancel, we record the intent here. The async handler checks this flag
+// after initialize() returns and aborts before sending session/prompt.
+// ---------------------------------------------------------------------------
+
+const cancelPending = new Set<string>(); // threadIds where cancel was requested
+
+// ---------------------------------------------------------------------------
 // Workspace scaffolding
 // ---------------------------------------------------------------------------
 
@@ -93,12 +105,24 @@ function ensureWorkspace(workspaceId: string, name: string): string {
 
 // ---------------------------------------------------------------------------
 // Wire an agent's raw ACP messages into the DB for a thread
+//
+// State tracking:
+//   "thinking"              – agent is working (processing a prompt)
+//   "awaiting_permission"   – agent asked for permission
+//   "idle"                  – agent is not working
+//
+// The agent is considered "thinking" from when we send session/prompt until
+// the rpc() Promise resolves. session/update notifications that arrive while
+// the agent works are stored but do NOT mark idle.
 // ---------------------------------------------------------------------------
 
 function wireAgent(agent: ClaudeAgent, threadId: string): void {
   if (agent.listenerCount("message") > 0) return; // already wired
 
   agent.on("message", (raw: any) => {
+    logInfo("server", `ACP message received: ${raw.method ?? "response"}`, threadId);
+    broadcastGlobalLog({ type: "acp", threadId, raw, timestamp: new Date().toISOString() });
+
     updateDb((db) => {
       // Store the raw ACP message verbatim
       const msg: Message = {
@@ -110,35 +134,55 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
       };
       db.messages.push(msg);
 
+      const thread = db.threads.find((t) => t.id === threadId);
+      if (!thread) return;
+
       // Keep thread.sessionId updated if ACP tells us
       const sessionId =
         raw.params?.sessionId ??
         raw.result?.sessionId ??
         raw.params?.update?.sessionId;
-      if (sessionId) {
-        const t = db.threads.find((t) => t.id === threadId);
-        if (t) t.sessionId = sessionId;
+      if (sessionId) thread.sessionId = sessionId;
+
+      // --- State transitions ---
+
+      // JSON-RPC response with stopReason → agent turn is done
+      if ("id" in raw && raw.result?.stopReason) {
+        const reason = raw.result.stopReason;
+        logInfo("server", `stopReason=${reason} received, setting idle`, threadId);
+        thread.status = "idle";
+        // Store error if not end_turn so the UI can surface it
+        if (reason !== "end_turn") {
+          thread.lastError = reason;
+        } else {
+          thread.lastError = undefined;
+        }
+        return;
       }
 
-      // Track whether the thread is waiting for permission
-      const thread = db.threads.find((t) => t.id === threadId);
-      if (thread) {
-        if (raw.method === "session/request_permission") {
-          thread.status = "awaiting_permission";
-          // Store the pending permission request id and options so we can respond
-          thread.pendingPermissionId = raw.id;
-          thread.pendingPermissionOptions = raw.params?.options ?? [];
-        } else if (raw.method === "session/update") {
-          // Auto-update thread title from session_info_update
-          const update = raw.params?.update;
-          if (update?.sessionUpdate === "session_info_update" && update?.title) {
-            thread.title = update.title;
-          }
-          // After tool execution completes, permission is no longer pending
-          thread.status = "idle";
-          thread.pendingPermissionId = undefined;
-          thread.pendingPermissionOptions = undefined;
+      // JSON-RPC error response → agent turn failed
+      if ("id" in raw && raw.error) {
+        logInfo("server", `RPC error received: ${JSON.stringify(raw.error)}, setting idle`, threadId);
+        thread.status = "idle";
+        thread.lastError = raw.error.message ?? "Unknown error";
+        return;
+      }
+
+      // Agent requests permission → awaiting_permission
+      if (raw.method === "session/request_permission") {
+        thread.status = "awaiting_permission";
+        thread.pendingPermissionId = raw.id;
+        thread.pendingPermissionOptions = raw.params?.options ?? [];
+        return;
+      }
+
+      // Agent sends a session/update → it's still working, just notify progress.
+      if (raw.method === "session/update") {
+        const update = raw.params?.update;
+        if (update?.sessionUpdate === "session_info_update" && update?.title) {
+          thread.title = update.title;
         }
+        return;
       }
     });
   });
@@ -146,7 +190,11 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
   agent.on("close", () => {
     updateDb((db) => {
       const t = db.threads.find((t) => t.id === threadId);
-      if (t) t.status = "idle";
+      if (t) {
+        t.status = "idle";
+        t.pendingPermissionId = undefined;
+        t.pendingPermissionOptions = undefined;
+      }
     });
   });
 }
@@ -300,18 +348,23 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
   updateDb((db) => {
     db.messages.push(userMsg);
     const t = db.threads.find((t) => t.id === threadId);
-    if (t) t.status = "thinking";
+    if (t) {
+      t.status = "thinking";
+      t.lastError = undefined;
+    }
   });
 
   res.json(userMsg);
 
   // Async: boot/resume agent and send prompt
   (async () => {
+    logInfo("server", `async handler started, wsPath=${wsPath}`, threadId);
     try {
       const agent = ClaudeAgent.getInstance(threadId, wsPath);
+      logInfo("server", "got agent instance, wiring...", threadId);
       wireAgent(agent, threadId);
 
-      // Try to resume existing session, or create new one
+      logInfo("server", `calling agent.initialize(thread.sessionId=${thread.sessionId})...`, threadId);
       const sessionId = await agent.initialize(thread.sessionId);
       const isResumingSession = thread.sessionId === sessionId && thread.sessionId !== undefined;
 
@@ -322,7 +375,6 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
           if (!t.sessionId) {
             t.sessionId = sessionId;
           }
-          // Add debug info
           if (isResumingSession) {
             console.log(`[server] Resumed existing session ${sessionId} for thread ${threadId}`);
           } else {
@@ -331,15 +383,44 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
         }
       });
 
-      // Fire session/prompt. ACP will respond with messages via the "message" event.
-      agent.send({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "session/prompt",
-        params: {
-          sessionId,
-          prompt: [{ type: "text", text }],
-        },
+      // Check if cancel arrived while we were inside initialize() (e.g. waiting
+      // for session/new to return). The session now exists so we can cancel it
+      // properly, and we must not send session/prompt.
+      if (cancelPending.has(threadId)) {
+        cancelPending.delete(threadId);
+        logInfo("server", `cancel was pending after initialize, aborting turn and cancelling sessionId=${sessionId}`, threadId);
+        agent.cancel(sessionId);
+        updateDb((db) => {
+          const t = db.threads.find((t) => t.id === threadId);
+          if (t) {
+            t.status = "idle";
+            t.pendingPermissionId = undefined;
+            t.pendingPermissionOptions = undefined;
+          }
+          db.messages.push({
+            id: newId("msg-cancel"),
+            threadId,
+            timestamp: new Date().toISOString(),
+            type: "system",
+            raw: { text: "Agent turn cancelled by user" },
+          });
+        });
+        return;
+      }
+
+      // Fire session/prompt via rpc() so we await the response and know
+      // exactly when the agent turn is complete.
+      logInfo("server", `sending session/prompt...`, threadId);
+      await agent.rpc("session/prompt", {
+        sessionId,
+        prompt: [{ type: "text", text }],
+      });
+      logInfo("server", `session/prompt completed`, threadId);
+
+      // Agent turn is done → set idle
+      updateDb((db) => {
+        const t = db.threads.find((t) => t.id === threadId);
+        if (t) t.status = "idle";
       });
     } catch (err: any) {
       updateDb((db) => {
@@ -440,6 +521,156 @@ app.post("/api/threads/:threadId/acp", async (req, res) => {
   agent.send(req.body);
   res.json({ ok: true });
 });
+
+// ---------------------------------------------------------------------------
+// Routes — Cancel agent turn
+// ---------------------------------------------------------------------------
+
+app.post("/api/threads/:threadId/cancel", async (req, res) => {
+  const { threadId } = req.params;
+  logInfo("server", "cancel requested", threadId);
+
+  // Set the flag immediately so any in-flight async handler (e.g. still inside
+  // initialize()) will see it and abort before sending session/prompt.
+  cancelPending.add(threadId);
+
+  const db = readDb();
+  const thread = db.threads.find((t) => t.id === threadId);
+  if (!thread) return res.status(404).json({ error: "thread not found" });
+
+  // If there's no active session, the async handler will catch cancelPending
+  // when initialize() finishes. Mark idle and return — nothing else to do yet.
+  if (!thread.sessionId) {
+    updateDb((db) => {
+      const t = db.threads.find((t) => t.id === threadId);
+      if (t) t.status = "idle";
+    });
+    return res.json({ ok: true });
+  }
+
+  const workspace = db.workspaces.find((ws) => ws.id === thread.workspaceId);
+  const wsPath = workspace?.path || thread.workspaceId;
+
+  // The agent process is already running (it's mid-turn), so send cancel
+  // directly without calling initialize() — we must not create a new session.
+  const agent = ClaudeAgent.getInstance(threadId, wsPath);
+  wireAgent(agent, threadId);
+
+  // If there's a pending permission, deny it first
+  if (thread.pendingPermissionId !== undefined) {
+    agent.send({
+      jsonrpc: "2.0",
+      id: thread.pendingPermissionId,
+      result: { selected: { optionId: "deny" } },
+    });
+
+    updateDb((db) => {
+      const t = db.threads.find((t) => t.id === threadId);
+      if (t) {
+        t.pendingPermissionId = undefined;
+        t.pendingPermissionOptions = undefined;
+      }
+      db.messages.push({
+        id: newId("msg-cancel-perm"),
+        threadId,
+        timestamp: new Date().toISOString(),
+        type: "permission_response",
+        raw: { selected: { optionId: "deny" } },
+      });
+    });
+  }
+
+  // Send session/cancel — use the thread's known sessionId, never a new one.
+  // Also clear the pending flag since we're handling it here directly.
+  cancelPending.delete(threadId);
+  agent.cancel(thread.sessionId);
+
+  updateDb((db) => {
+    const t = db.threads.find((t) => t.id === threadId);
+    if (t) {
+      t.status = "idle";
+      t.pendingPermissionId = undefined;
+      t.pendingPermissionOptions = undefined;
+    }
+    db.messages.push({
+      id: newId("msg-cancel"),
+      threadId,
+      timestamp: new Date().toISOString(),
+      type: "system",
+      raw: { text: "Agent turn cancelled by user" },
+    });
+  });
+
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Routes — Thread Log SSE (per-thread log streaming)
+// ---------------------------------------------------------------------------
+
+app.get("/api/threads/:threadId/logs", (req, res) => {
+  const { threadId } = req.params;
+  logInfo("server", "thread log SSE connected", threadId);
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  // Send all existing logs for this thread
+  const existingLogs = getLogs({ threadId, limit: 200 });
+  for (const log of existingLogs.reverse()) {
+    res.write(`data: ${JSON.stringify(log)}\n\n`);
+  }
+
+  // Poll for new logs every 500ms
+  let lastId = existingLogs.length > 0 ? existingLogs[existingLogs.length - 1].id : 0;
+  const interval = setInterval(() => {
+    const newLogs = getLogs({ threadId, limit: 50 });
+    for (const log of newLogs) {
+      if (log.id > lastId) {
+        res.write(`data: ${JSON.stringify(log)}\n\n`);
+        lastId = log.id;
+      }
+    }
+  }, 500);
+
+  req.on("close", () => {
+    clearInterval(interval);
+    logInfo("server", "thread log SSE disconnected", threadId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Routes — Global Activity Log SSE (all threads)
+// ---------------------------------------------------------------------------
+
+const globalLogClients = new Set<any>();
+
+app.get("/api/logs", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  // Send existing logs
+  const existingLogs = getLogs({ limit: 100 });
+  for (const log of existingLogs.reverse()) {
+    res.write(`data: ${JSON.stringify(log)}\n\n`);
+  }
+
+  globalLogClients.add(res);
+  req.on("close", () => {
+    globalLogClients.delete(res);
+  });
+});
+
+function broadcastGlobalLog(event: any) {
+  const data = JSON.stringify(event);
+  for (const client of globalLogClients) {
+    client.write(`data: ${data}\n\n`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Vite / static
