@@ -464,19 +464,16 @@ app.post("/api/threads/:threadId/respond", async (req, res) => {
   const agent = ClaudeAgent.getInstance(threadId, wsPath);
   wireAgent(agent, threadId);
 
-  // Ensure agent is initialized and session is resumed before sending permission response
-  try {
-    await agent.initialize(thread.sessionId);
-  } catch (err) {
-    console.error("[server] Failed to initialize agent for permission response:", err);
-    return res.status(500).json({ error: "Failed to initialize agent" });
-  }
+  // Do NOT call agent.initialize() here — the agent process is already alive
+  // and mid-turn (that's how it sent the permission request). Calling
+  // session/load would replay session history and cause a race condition where
+  // the permission response arrives late and gets treated as a refusal.
 
-  // Send exactly what ACP expects: result.selected structure
+  // Send exactly what ACP expects: result.outcome structure
   agent.send({
     jsonrpc: "2.0",
     id: thread.pendingPermissionId,
-    result: { selected: { optionId } },
+    result: { outcome: { outcome: "selected", optionId } },
   });
 
   updateDb((db) => {
@@ -561,7 +558,7 @@ app.post("/api/threads/:threadId/cancel", async (req, res) => {
     agent.send({
       jsonrpc: "2.0",
       id: thread.pendingPermissionId,
-      result: { selected: { optionId: "deny" } },
+      result: { outcome: { outcome: "cancelled" } },
     });
 
     updateDb((db) => {

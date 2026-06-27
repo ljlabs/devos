@@ -10,13 +10,11 @@ import {
   Trash2,
   Settings2,
   MessagesSquare,
-  Search,
   History,
   Settings,
   FileText,
   HelpCircle,
-  Menu,
-  ShieldAlert
+  Menu
 } from "lucide-react";
 import { Workspace } from "../types";
 
@@ -27,8 +25,8 @@ interface WorkspaceSidebarProps {
   onOpenNewWorkspace: () => void;
   onEditWorkspace: (id: string) => void;
   onDeleteWorkspace: (id: string) => void;
-  activeView: 'threads' | 'search' | 'activity' | 'security';
-  onSelectView: (view: 'threads' | 'search' | 'activity' | 'security') => void;
+  activeView: 'threads' | 'activity';
+  onSelectView: (view: 'threads' | 'activity') => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
 }
@@ -146,18 +144,6 @@ export default function WorkspaceSidebar({
             </button>
 
             <button
-              onClick={() => onSelectView('search')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all ${
-                activeView === 'search' 
-                  ? "bg-emerald-500/5 border border-emerald-500/20 text-white font-medium" 
-                  : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
-              }`}
-            >
-              <Search size={16} className={activeView === 'search' ? "text-emerald-400" : "text-slate-500"} />
-              {!collapsed && <span className="text-sm font-sans">Search Code</span>}
-            </button>
-
-            <button
               onClick={() => onSelectView('activity')}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all ${
                 activeView === 'activity' 
@@ -169,17 +155,6 @@ export default function WorkspaceSidebar({
               {!collapsed && <span className="text-sm font-sans">Global Logs</span>}
             </button>
 
-            <button
-              onClick={() => onSelectView('security')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all ${
-                activeView === 'security' 
-                  ? "bg-amber-500/5 border border-amber-500/20 text-white font-medium" 
-                  : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
-              }`}
-            >
-              <ShieldAlert size={16} className={activeView === 'security' ? "text-amber-400" : "text-slate-500"} />
-              {!collapsed && <span className="text-sm font-sans">Gatekeeping Rules</span>}
-            </button>
           </nav>
         </div>
       </div>

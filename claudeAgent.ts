@@ -57,6 +57,10 @@ export class ClaudeAgent extends EventEmitter {
   private initialized = false;
   private pendingRpc = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
   private nextId = 1;
+  // True while session/load is in-flight. The ACP subprocess replays the full
+  // session history as session/update notifications during the load — suppress
+  // them so they don't get re-persisted into the DB as duplicate messages.
+  private suppressEmit = false;
 
   constructor(
     private readonly threadId: string,
@@ -91,12 +95,20 @@ export class ClaudeAgent extends EventEmitter {
     if (sessionId) {
       // Thread already has a session — load it. This must succeed; we never
       // silently replace an existing session with a new one.
+      // Suppress message emission during session/load: the ACP subprocess
+      // replays the full session history as session/update notifications, which
+      // we've already persisted. Re-emitting them would create duplicates in DB.
       logInfo("acp", `sending "session/load" RPC with sessionId=${sessionId}...`, this.threadId);
-      await this.rpc("session/load", {
-        sessionId,
-        cwd: this.workspacePath,
-        mcpServers: [],
-      });
+      this.suppressEmit = true;
+      try {
+        await this.rpc("session/load", {
+          sessionId,
+          cwd: this.workspacePath,
+          mcpServers: [],
+        });
+      } finally {
+        this.suppressEmit = false;
+      }
       logInfo("acp", "session loaded OK", this.threadId);
       return sessionId;
     }
@@ -229,7 +241,11 @@ export class ClaudeAgent extends EventEmitter {
 
       // Everything else (inbound requests + notifications) bubbles up raw
       logInfo("acp", `EMIT message: ${msg.method ?? "response"}`, this.threadId);
-      this.emit("message", msg);
+      if (!this.suppressEmit) {
+        this.emit("message", msg);
+      } else {
+        logInfo("acp", `SUPPRESSED (session/load replay): ${msg.method ?? "response"}`, this.threadId);
+      }
     });
 
     this.proc.stderr!.on("data", (d) => {

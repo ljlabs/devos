@@ -5,9 +5,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import {
-  Search,
-  History,
-  ShieldCheck
+  History
 } from "lucide-react";
 import WorkspaceSidebar from "./components/WorkspaceSidebar";
 import ThreadList from "./components/ThreadList";
@@ -24,13 +22,11 @@ export default function App() {
   const [inputText, setInputText] = useState<string>("");
 
   // Navigation / views
-  const [activeView, setActiveView] = useState<'threads' | 'search' | 'activity' | 'security'>('threads');
-  const [searchQuery, setSearchQuery] = useState("");
+  const [activeView, setActiveView] = useState<'threads' | 'activity'>('threads');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [globalLogs, setGlobalLogs] = useState<string[]>([]);
   const [threadLogs, setThreadLogs] = useState<Record<string, any[]>>({});
-  const [searchResult, setSearchResult] = useState<any[]>([]);
   const threadSseRef = useRef<EventSource | null>(null);
   const globalSseRef = useRef<EventSource | null>(null);
 
@@ -413,23 +409,6 @@ export default function App() {
     }, 2500);
   };
 
-  // Code search simulation
-  useEffect(() => {
-    if (!searchQuery.trim()) {
-      setSearchResult([]);
-      return;
-    }
-    const filtered = [
-      { file: "/src/api/routes.js", preview: "router.get('/users', UserController.getAllUsers);" },
-      { file: "/src/api/UserController.js", preview: "export const UserController = { getAllUsers..." },
-      { file: "/src/auth/jwt.ts", preview: "export function signToken(payload) {..." }
-    ].filter(item =>
-      item.file.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.preview.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-    setSearchResult(filtered);
-  }, [searchQuery]);
-
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#0B0B0C] text-[#e4e2e4] font-sans antialiased">
       {/* COLUMN 1: WORKSPACE SIDEBAR */}
@@ -479,59 +458,6 @@ export default function App() {
         </>
       )}
 
-      {/* SEARCH VIEW PANEL */}
-      {activeView === 'search' && (
-        <main className="flex-1 flex flex-col bg-[#0B0B0C] overflow-hidden p-8 animate-fadeIn">
-          <div className="max-w-4xl w-full mx-auto space-y-6">
-            <div className="flex items-center gap-2 select-none pb-4 border-b border-white/5">
-              <Search className="text-emerald-400" size={24} />
-              <h2 className="font-sans font-bold text-xl text-white">Search Local Workspace Directory</h2>
-            </div>
-
-            <div className="relative">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search class declarations, endpoints, functions or keywords..."
-                className="w-full bg-[#0E0E11] border border-white/10 rounded-xl px-5 py-4 pl-12 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all font-sans"
-              />
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-            </div>
-
-            <div className="space-y-3 pt-4 overflow-y-auto max-h-[60vh] custom-scrollbar pr-2">
-              {searchResult.length === 0 ? (
-                <p className="text-sm text-slate-500 font-sans italic text-center py-12">
-                  {searchQuery ? "No matches found in active repository." : "Type keywords to search code files indexed by the workspace indexer."}
-                </p>
-              ) : (
-                searchResult.map((res, i) => (
-                  <div
-                    key={i}
-                    className="p-4 rounded-lg bg-[#0E0E11] border border-white/5 hover:border-emerald-500/20 cursor-pointer transition-all space-y-2 group"
-                    onClick={() => {
-                      setActiveView('threads');
-                      handleCreateThreadQuick();
-                    }}
-                  >
-                    <div className="flex justify-between items-center select-none">
-                      <span className="font-mono text-xs text-emerald-400 font-semibold">{res.file}</span>
-                      <span className="text-[10px] font-mono text-slate-500 group-hover:text-emerald-400 flex items-center gap-1 transition-colors">
-                        Launch inspection thread
-                        <span>+</span>
-                      </span>
-                    </div>
-                    <pre className="font-mono text-xs text-slate-300 bg-black/40 p-2.5 rounded-md border border-white/5 overflow-x-auto">
-                      <code>{res.preview}</code>
-                    </pre>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </main>
-      )}
-
       {/* GLOBAL LOGS VIEW PANEL */}
       {activeView === 'activity' && (
         <main className="flex-1 flex flex-col bg-[#0B0B0C] overflow-hidden p-8 animate-fadeIn">
@@ -560,24 +486,6 @@ export default function App() {
                   </p>
                 ))
               )}
-            </div>
-          </div>
-        </main>
-      )}
-
-      {/* GATEKEEPING RULES VIEW PANEL */}
-      {activeView === 'security' && (
-        <main className="flex-1 flex flex-col bg-[#0B0B0C] overflow-hidden p-8 animate-fadeIn">
-          <div className="max-w-4xl w-full mx-auto h-full flex items-center justify-center">
-            <div className="text-center space-y-4 select-none">
-              <ShieldCheck className="w-16 h-16 text-emerald-400 mx-auto opacity-20" />
-              <h2 className="font-sans font-bold text-xl text-white">Permissions Managed by ACP</h2>
-              <p className="text-sm text-slate-400 max-w-md mx-auto">
-                Permission requests are now managed dynamically by the Agent Client Protocol. When Claude requests access to files or system resources, you'll see interactive permission prompts in the chat.
-              </p>
-              <p className="text-xs text-slate-500 font-mono mt-4">
-                All permission decisions are routed through the ACP session/request_permission protocol.
-              </p>
             </div>
           </div>
         </main>
