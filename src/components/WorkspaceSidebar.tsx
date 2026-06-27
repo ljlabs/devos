@@ -4,14 +4,16 @@
  */
 
 import React from "react";
-import { 
-  FolderOpen, 
-  Plus, 
-  MessagesSquare, 
-  Search, 
-  History, 
-  Settings, 
-  FileText, 
+import {
+  FolderOpen,
+  Plus,
+  Trash2,
+  Settings2,
+  MessagesSquare,
+  Search,
+  History,
+  Settings,
+  FileText,
   HelpCircle,
   Menu,
   ShieldAlert
@@ -23,6 +25,8 @@ interface WorkspaceSidebarProps {
   activeWorkspaceId: string;
   onSelectWorkspace: (id: string) => void;
   onOpenNewWorkspace: () => void;
+  onEditWorkspace: (id: string) => void;
+  onDeleteWorkspace: (id: string) => void;
   activeView: 'threads' | 'search' | 'activity' | 'security';
   onSelectView: (view: 'threads' | 'search' | 'activity' | 'security') => void;
   collapsed: boolean;
@@ -34,6 +38,8 @@ export default function WorkspaceSidebar({
   activeWorkspaceId,
   onSelectWorkspace,
   onOpenNewWorkspace,
+  onEditWorkspace,
+  onDeleteWorkspace,
   activeView,
   onSelectView,
   collapsed,
@@ -79,23 +85,42 @@ export default function WorkspaceSidebar({
             {workspaces.map((ws) => {
               const isActive = ws.id === activeWorkspaceId;
               return (
-                <button
-                  key={ws.id}
-                  onClick={() => onSelectWorkspace(ws.id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all ${
-                    isActive 
-                      ? "bg-emerald-500/10 border border-emerald-500/20 text-white shadow-[0_0_15px_rgba(16,185,129,0.05)]" 
-                      : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
-                  }`}
-                  title={ws.name}
-                >
-                  <FolderOpen size={16} className={isActive ? "text-emerald-400" : "text-slate-500"} />
+                <div key={ws.id} className="group relative">
+                  <button
+                    onClick={() => onSelectWorkspace(ws.id)}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all ${
+                      isActive
+                        ? "bg-emerald-500/10 border border-emerald-500/20 text-white shadow-[0_0_15px_rgba(16,185,129,0.05)]"
+                        : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                    }`}
+                    title={ws.name}
+                  >
+                    <FolderOpen size={16} className={isActive ? "text-emerald-400" : "text-slate-500"} />
+                    {!collapsed && (
+                      <span className="flex-1 text-sm font-sans truncate font-medium">
+                        {ws.name}
+                      </span>
+                    )}
+                  </button>
                   {!collapsed && (
-                    <span className="text-sm font-sans truncate font-medium">
-                      {ws.name}
-                    </span>
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onEditWorkspace(ws.id); }}
+                        className="p-1 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 cursor-pointer"
+                        title="Edit workspace"
+                      >
+                        <Settings2 size={12} />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); if (window.confirm(`Delete workspace "${ws.name}" and all its threads?`)) onDeleteWorkspace(ws.id); }}
+                        className="p-1 rounded hover:bg-white/10 text-slate-500 hover:text-red-400 cursor-pointer"
+                        title="Delete workspace"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
                   )}
-                </button>
+                </div>
               );
             })}
           </nav>

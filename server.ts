@@ -25,7 +25,7 @@ import { DatabaseSchema, Workspace, Thread, Message } from "./src/types";
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
+const PORT = parseInt(process.env.PORT || "3000", 10);
 const DB_FILE = path.join(process.cwd(), "db.json");
 const WORKSPACES_DIR = path.join(process.cwd(), "sandbox_workspaces");
 
@@ -172,6 +172,19 @@ app.post("/api/workspaces", (req, res) => {
   res.status(201).json(workspace);
 });
 
+app.patch("/api/workspaces/:workspaceId", (req, res) => {
+  const { name, path: wsPath } = req.body;
+  if (wsPath !== undefined) {
+    return res.status(400).json({ error: "workspace path cannot be changed" });
+  }
+  const db = readDb();
+  const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+  if (!ws) return res.status(404).json({ error: "not found" });
+  if (name) ws.name = name;
+  writeDb(db);
+  res.json(ws);
+});
+
 // ---------------------------------------------------------------------------
 // Routes — Threads
 // ---------------------------------------------------------------------------
@@ -201,6 +214,48 @@ app.get("/api/threads/:threadId", (req, res) => {
   const thread = db.threads.find((t) => t.id === req.params.threadId);
   if (!thread) return res.status(404).json({ error: "not found" });
   res.json(thread);
+});
+
+app.patch("/api/threads/:threadId", (req, res) => {
+  const { title } = req.body;
+  if (!title) return res.status(400).json({ error: "title required" });
+  const db = readDb();
+  const thread = db.threads.find((t) => t.id === req.params.threadId);
+  if (!thread) return res.status(404).json({ error: "not found" });
+  thread.title = title;
+  writeDb(db);
+  res.json(thread);
+});
+
+app.delete("/api/threads/:threadId", (req, res) => {
+  const { threadId } = req.params;
+  const db = readDb();
+  const thread = db.threads.find((t) => t.id === threadId);
+  if (!thread) return res.status(404).json({ error: "not found" });
+
+  db.threads = db.threads.filter((t) => t.id !== threadId);
+  db.messages = db.messages.filter((m) => m.threadId !== threadId);
+  writeDb(db);
+
+  ClaudeAgent.removeInstance(threadId);
+  res.json({ ok: true });
+});
+
+app.delete("/api/workspaces/:workspaceId", (req, res) => {
+  const { workspaceId } = req.params;
+  const db = readDb();
+  const wsIndex = db.workspaces.findIndex((w) => w.id === workspaceId);
+  if (wsIndex === -1) return res.status(404).json({ error: "not found" });
+
+  const threadIds = db.threads.filter((t) => t.workspaceId === workspaceId).map((t) => t.id);
+  threadIds.forEach((id) => ClaudeAgent.removeInstance(id));
+
+  db.threads = db.threads.filter((t) => t.workspaceId !== workspaceId);
+  db.messages = db.messages.filter((m) => !threadIds.includes(m.threadId));
+  db.workspaces.splice(wsIndex, 1);
+  writeDb(db);
+
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------

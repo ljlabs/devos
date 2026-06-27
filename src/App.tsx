@@ -4,22 +4,15 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { 
-  Laptop, 
-  Cpu, 
-  RefreshCw, 
-  Search, 
-  History, 
-  Plus, 
-  FolderPlus, 
-  ShieldCheck,
-  FileCode,
-  Code
+import {
+  Search,
+  History,
+  ShieldCheck
 } from "lucide-react";
 import WorkspaceSidebar from "./components/WorkspaceSidebar";
 import ThreadList from "./components/ThreadList";
 import ChatCanvas from "./components/ChatCanvas";
-import { NewWorkspaceModal, NewThreadModal } from "./components/Dialogs";
+import { WorkspaceModal } from "./components/Dialogs";
 import { Workspace, Thread, Message } from "./types";
 
 export default function App() {
@@ -29,7 +22,7 @@ export default function App() {
   const [activeThreadId, setActiveThreadId] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState<string>("");
-  
+
   // Navigation / views
   const [activeView, setActiveView] = useState<'threads' | 'search' | 'activity' | 'security'>('threads');
   const [searchQuery, setSearchQuery] = useState("");
@@ -38,12 +31,11 @@ export default function App() {
   const [globalLogs, setGlobalLogs] = useState<string[]>([]);
   const [searchResult, setSearchResult] = useState<any[]>([]);
 
-  // Dialog states
-  const [showNewWorkspace, setShowNewWorkspace] = useState(false);
-  const [newWorkspaceName, setNewWorkspaceName] = useState("");
-  const [newWorkspacePath, setNewWorkspacePath] = useState("");
-  const [showNewThread, setShowNewThread] = useState(false);
-  const [newThreadTitle, setNewThreadTitle] = useState("");
+  // Dialog states (workspace modal)
+  const [showWorkspaceModal, setShowWorkspaceModal] = useState(false);
+  const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [workspacePath, setWorkspacePath] = useState("");
 
   const [isLoading, setIsLoading] = useState(true);
 
@@ -70,7 +62,6 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setThreads(data);
-        // Find if active thread exists or choose first
         if (data.length > 0) {
           const currentExists = data.some((t: Thread) => t.id === activeThreadId);
           if (!currentExists) {
@@ -104,17 +95,16 @@ export default function App() {
     const initialize = async () => {
       setIsLoading(true);
       await fetchWorkspaces();
-      
-      // Setup mock global system logs for activity tab
+
       setGlobalLogs([
         `[${new Date(Date.now() - 3600000).toLocaleTimeString()}] DevOS ACP Background state controller initialized.`,
         `[${new Date(Date.now() - 3200000).toLocaleTimeString()}] Connected local folders to SQLite single-file database.`,
         `[${new Date(Date.now() - 2800000).toLocaleTimeString()}] Registered workspace project: frontend-auth`,
-        `[${new Date(Date.now() - 2400000).toLocaleTimeString()}] Bound Claude Code client thread 'Refactor API' to port 3000`,
+        `[${new Date(Date.now() - 2400000).toLocaleTimeString()}] Bound Claude Code client thread 'Refactor API' to local ACP runner`,
         `[${new Date(Date.now() - 120000).toLocaleTimeString()}] User submitted workspace query: 'Refactor routes.js'`,
         `[${new Date(Date.now() - 90000).toLocaleTimeString()}] Claude Code triggered ACP action: 'rm -rf dist && npm run build' (Pending Clearance)`
       ]);
-      
+
       setIsLoading(false);
     };
     initialize();
@@ -139,7 +129,7 @@ export default function App() {
   const activeThread = threads.find(t => t.id === activeThreadId) || null;
   const activeThreadStatus = activeThread?.status;
 
-  // Polling state helper to update message states or threads status
+  // Polling
   useEffect(() => {
     const interval = setInterval(() => {
       if (activeThreadId) {
@@ -152,65 +142,139 @@ export default function App() {
     return () => clearInterval(interval);
   }, [activeThreadId, activeWorkspaceId, activeThreadStatus]);
 
-  // Handle Workspace creation
-  const handleCreateWorkspace = async (e: React.FormEvent) => {
+  // Handle Workspace creation/edit
+  const handleWorkspaceSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newWorkspaceName.trim()) return;
+    if (!workspaceName.trim()) return;
 
     try {
-      const res = await fetch("/api/workspaces", {
+      if (editingWorkspace) {
+        const res = await fetch(`/api/workspaces/${editingWorkspace.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: workspaceName })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setWorkspaces(prev => prev.map(w => w.id === data.id ? data : w));
+          setGlobalLogs(prev => [
+            `[${new Date().toLocaleTimeString()}] Updated workspace: ${workspaceName}`,
+            ...prev
+          ]);
+        }
+      } else {
+        const res = await fetch("/api/workspaces", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: workspaceName, path: workspacePath })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setWorkspaces(prev => [...prev, data]);
+          setActiveWorkspaceId(data.id);
+          setGlobalLogs(prev => [
+            `[${new Date().toLocaleTimeString()}] Registered new local workspace project: ${workspaceName}`,
+            ...prev
+          ]);
+        }
+      }
+      setWorkspaceName("");
+      setWorkspacePath("");
+      setEditingWorkspace(null);
+      setShowWorkspaceModal(false);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Open edit modal for a workspace
+  const handleOpenEditWorkspace = (workspaceId: string) => {
+    const ws = workspaces.find(w => w.id === workspaceId);
+    if (!ws) return;
+    setEditingWorkspace(ws);
+    setWorkspaceName(ws.name);
+    setWorkspacePath(ws.path);
+    setShowWorkspaceModal(true);
+  };
+
+  // Open new workspace modal
+  const handleOpenNewWorkspace = () => {
+    setEditingWorkspace(null);
+    setWorkspaceName("");
+    setWorkspacePath("");
+    setShowWorkspaceModal(true);
+  };
+
+  // Handle Thread creation (no modal — direct creation)
+  const handleCreateThreadQuick = async () => {
+    if (!activeWorkspaceId) return;
+
+    try {
+      const res = await fetch(`/api/workspaces/${activeWorkspaceId}/threads`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newWorkspaceName, path: newWorkspacePath })
+        body: JSON.stringify({ title: "Untitled" })
       });
       if (res.ok) {
         const data = await res.json();
-        setWorkspaces(prev => [...prev, data]);
-        setActiveWorkspaceId(data.id);
-        
-        // Log activity
+        setThreads(prev => [...prev, data]);
+        setActiveThreadId(data.id);
+
         setGlobalLogs(prev => [
-          `[${new Date().toLocaleTimeString()}] Registered new local workspace project: ${newWorkspaceName}`,
+          `[${new Date().toLocaleTimeString()}] Initialized Claude ACP process thread`,
           ...prev
         ]);
-        
-        // Reset and close
-        setNewWorkspaceName("");
-        setNewWorkspacePath("");
-        setShowNewWorkspace(false);
       }
     } catch (e) {
       console.error(e);
     }
   };
 
-  // Handle Thread creation
-  const handleCreateThread = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activeWorkspaceId) return;
-    // Title is optional now - will be auto-set from ACP session_info_update
-
+  // Handle Thread rename
+  const handleRenameThread = async (threadId: string, newTitle: string) => {
     try {
-      const res = await fetch(`/api/workspaces/${activeWorkspaceId}/threads`, {
-        method: "POST",
+      const res = await fetch(`/api/threads/${threadId}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          title: newThreadTitle || "Untitled"
-        })
+        body: JSON.stringify({ title: newTitle })
       });
       if (res.ok) {
-        const data = await res.json();
-        setThreads(prev => [...prev, data]);
-        setActiveThreadId(data.id);
-        
-        // Log activity
-        setGlobalLogs(prev => [
-          `[${new Date().toLocaleTimeString()}] Initialized Claude ACP process thread`,
-          ...prev
-        ]);
-        
-        setNewThreadTitle("");
-        setShowNewThread(false);
+        setThreads(prev => prev.map(t => t.id === threadId ? { ...t, title: newTitle } : t));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Handle Thread deletion
+  const handleDeleteThread = async (threadId: string) => {
+    try {
+      const res = await fetch(`/api/threads/${threadId}`, { method: "DELETE" });
+      if (res.ok) {
+        setThreads(prev => prev.filter(t => t.id !== threadId));
+        if (activeThreadId === threadId) {
+          setActiveThreadId("");
+          setMessages([]);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Handle Workspace deletion
+  const handleDeleteWorkspace = async (workspaceId: string) => {
+    try {
+      const res = await fetch(`/api/workspaces/${workspaceId}`, { method: "DELETE" });
+      if (res.ok) {
+        setWorkspaces(prev => prev.filter(w => w.id !== workspaceId));
+        if (activeWorkspaceId === workspaceId) {
+          const remaining = workspaces.filter(w => w.id !== workspaceId);
+          setActiveWorkspaceId(remaining.length > 0 ? remaining[0].id : "");
+          setThreads([]);
+          setMessages([]);
+          setActiveThreadId("");
+        }
       }
     } catch (e) {
       console.error(e);
@@ -231,7 +295,6 @@ export default function App() {
         body: JSON.stringify({ text: messageText })
       });
       if (res.ok) {
-        // Fetch fresh messages and thread state
         await fetchMessages(activeThreadId);
         await fetchThreads(activeWorkspaceId);
       }
@@ -254,7 +317,6 @@ export default function App() {
           `[${new Date().toLocaleTimeString()}] Permission response sent: ${optionId}`,
           ...prev
         ]);
-        // Fetch fresh state
         await fetchMessages(activeThreadId);
         await fetchThreads(activeWorkspaceId);
       }
@@ -270,7 +332,7 @@ export default function App() {
       `[${new Date().toLocaleTimeString()}] Initiating GCP Cloud Run service deployment...`,
       ...prev
     ]);
-    
+
     setTimeout(() => {
       setIsDeploying(false);
       setGlobalLogs(prev => [
@@ -291,8 +353,8 @@ export default function App() {
       { file: "/src/api/routes.js", preview: "router.get('/users', UserController.getAllUsers);" },
       { file: "/src/api/UserController.js", preview: "export const UserController = { getAllUsers..." },
       { file: "/src/auth/jwt.ts", preview: "export function signToken(payload) {..." }
-    ].filter(item => 
-      item.file.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    ].filter(item =>
+      item.file.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.preview.toLowerCase().includes(searchQuery.toLowerCase())
     );
     setSearchResult(filtered);
@@ -308,7 +370,9 @@ export default function App() {
           setActiveWorkspaceId(id);
           setActiveView('threads');
         }}
-        onOpenNewWorkspace={() => setShowNewWorkspace(true)}
+        onOpenNewWorkspace={handleOpenNewWorkspace}
+        onEditWorkspace={handleOpenEditWorkspace}
+        onDeleteWorkspace={handleDeleteWorkspace}
         activeView={activeView}
         onSelectView={setActiveView}
         collapsed={sidebarCollapsed}
@@ -323,7 +387,9 @@ export default function App() {
             threads={threads}
             activeThreadId={activeThreadId}
             onSelectThread={setActiveThreadId}
-            onOpenNewThread={() => setShowNewThread(true)}
+            onOpenNewThread={handleCreateThreadQuick}
+            onRenameThread={handleRenameThread}
+            onDeleteThread={handleDeleteThread}
           />
 
           {/* COLUMN 3: MAIN CHAT CANVAS */}
@@ -367,12 +433,12 @@ export default function App() {
                 </p>
               ) : (
                 searchResult.map((res, i) => (
-                  <div 
-                    key={i} 
+                  <div
+                    key={i}
                     className="p-4 rounded-lg bg-[#0E0E11] border border-white/5 hover:border-emerald-500/20 cursor-pointer transition-all space-y-2 group"
                     onClick={() => {
-                      setNewThreadTitle(`Inspect: ${res.file.split("/").pop()}`);
-                      setShowNewThread(true);
+                      setActiveView('threads');
+                      handleCreateThreadQuick();
                     }}
                   >
                     <div className="flex justify-between items-center select-none">
@@ -402,7 +468,7 @@ export default function App() {
                 <History className="text-emerald-400" size={24} />
                 <h2 className="font-sans font-bold text-xl text-white">Global DevOS Activity Audit Trail</h2>
               </div>
-              <button 
+              <button
                 onClick={() => setGlobalLogs([])}
                 className="text-xs text-rose-400 hover:text-rose-300 hover:underline cursor-pointer"
               >
@@ -445,22 +511,15 @@ export default function App() {
       )}
 
       {/* --- MODAL DIALOGS --- */}
-      <NewWorkspaceModal
-        isOpen={showNewWorkspace}
-        onClose={() => setShowNewWorkspace(false)}
-        name={newWorkspaceName}
-        setName={setNewWorkspaceName}
-        path={newWorkspacePath}
-        setPath={setNewWorkspacePath}
-        onSubmit={handleCreateWorkspace}
-      />
-
-      <NewThreadModal
-        isOpen={showNewThread}
-        onClose={() => setShowNewThread(false)}
-        title={newThreadTitle}
-        setTitle={setNewThreadTitle}
-        onSubmit={handleCreateThread}
+      <WorkspaceModal
+        isOpen={showWorkspaceModal}
+        onClose={() => setShowWorkspaceModal(false)}
+        editingWorkspace={editingWorkspace}
+        name={workspaceName}
+        setName={setWorkspaceName}
+        path={workspacePath}
+        setPath={setWorkspacePath}
+        onSubmit={handleWorkspaceSubmit}
       />
     </div>
   );

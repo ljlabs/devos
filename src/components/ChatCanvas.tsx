@@ -286,7 +286,7 @@ export default function ChatCanvas({
           <div className="space-y-1">
             <p className="text-emerald-400">[$] Connecting Claude Agent Client Protocol (ACP) system layer...</p>
             <p className="text-slate-500">[system] Session ID: {activeThread.sessionId || "initializing…"}</p>
-            <p className="text-[#4ADE80]">[acp] Server connection verified on http://localhost:3000</p>
+            <p className="text-[#4ADE80]">[acp] Server connection verified on http://localhost:{window.location.port || "80"}</p>
             <p className="text-slate-500">[info] Active messages: {messages.length}</p>
             <p className="text-slate-500">[status] Thread status: {activeThread.status}</p>
             {activeThread.pendingPermissionId && (

@@ -23,6 +23,6 @@ Before making changes, consult the architecture documentation in `docs/`:
 
 ## Commands
 
-- `npm run dev` — Start dev server (Express + Vite, port 3000)
+- `npm run dev` — Start dev server (Express + Vite, port configured in `.env`)
 - `npm run build` — Production build (vite build + esbuild server.cjs)
 - `npm run lint` — Type-check with `tsc --noEmit`

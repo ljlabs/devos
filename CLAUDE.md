@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-- `npm run dev` — Start dev server (Express + Vite, port 3000)
+- `npm run dev` — Start dev server (Express + Vite, port configured in `.env`)
 - `npm run build` — Build production bundle (vite build + esbuild server.cjs)
 - `npm run start` — Run production build
 - `npm run lint` — Type-check with `tsc --noEmit`
