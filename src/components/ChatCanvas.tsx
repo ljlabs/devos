@@ -12,23 +12,24 @@
  */
 
 import React, { useState, useRef, useEffect } from "react";
-import { 
-  Terminal, 
-  Bot, 
-  User, 
-  ShieldAlert, 
-  CheckCircle2, 
-  XCircle, 
-  Paperclip, 
-  Send, 
-  Copy, 
+import {
+  Terminal,
+  Bot,
+  User,
+  ShieldAlert,
+  CheckCircle2,
+  XCircle,
+  Paperclip,
+  Send,
+  Copy,
   Check,
   ChevronDown,
   ChevronUp,
   Cpu,
   Layers,
   Sparkles,
-  Zap
+  Zap,
+  Square
 } from "lucide-react";
 import { Message, Thread } from "../types";
 
@@ -38,9 +39,12 @@ interface ChatCanvasProps {
   inputText: string;
   onChangeInput: (text: string) => void;
   onSendMessage: () => void;
+  onCancelAgent: () => void;
   onPermissionResponse: (optionId: string) => void;
   onDeploy: () => void;
   isDeploying: boolean;
+  threadLogs: any[];
+  onClearThreadLogs: () => void;
 }
 
 /**
@@ -193,12 +197,17 @@ export default function ChatCanvas({
   inputText,
   onChangeInput,
   onSendMessage,
+  onCancelAgent,
   onPermissionResponse,
   onDeploy,
   isDeploying,
+  threadLogs,
+  onClearThreadLogs,
 }: ChatCanvasProps) {
   const [expandedToolId, setExpandedToolId] = useState<string | null>(null);
   const [showConsole, setShowConsole] = useState(false);
+
+  const isAgentBusy = activeThread?.status !== 'idle';
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -255,7 +264,7 @@ export default function ChatCanvas({
             }`}
           >
             <Terminal size={14} />
-            <span>Console Log</span>
+            <span>Thread Log</span>
           </button>
           
           <div className="h-4 w-[1px] bg-white/5 mx-1" />
@@ -276,23 +285,34 @@ export default function ChatCanvas({
         </div>
       </header>
 
-      {/* Floating local mock terminal layer */}
+      {/* Floating Thread Log panel */}
       {showConsole && (
-        <div className="absolute top-14 left-0 w-full h-44 bg-[#111114] border-b border-white/5 p-4 font-mono text-[11px] text-slate-300 overflow-y-auto custom-scrollbar z-20 shadow-2xl">
-          <div className="flex justify-between text-slate-500 pb-2 border-b border-slate-900 mb-2 select-none">
-            <span>DEVOS AGENT CLIENT PROTOCOL CONSOLE</span>
-            <button onClick={() => setShowConsole(false)} className="hover:text-slate-300">close</button>
+        <div className="absolute top-14 left-0 w-full h-56 bg-[#111114] border-b border-white/5 p-4 font-mono text-[11px] text-slate-300 overflow-y-auto custom-scrollbar z-20 shadow-2xl">
+          <div className="flex justify-between items-center text-slate-500 pb-2 border-b border-slate-900 mb-2 select-none">
+            <span>THREAD LOG — {activeThread.title}</span>
+            <div className="flex items-center gap-3">
+              <button onClick={onClearThreadLogs} className="hover:text-slate-300 text-[10px]">clear</button>
+              <button onClick={() => setShowConsole(false)} className="hover:text-slate-300">close</button>
+            </div>
           </div>
           <div className="space-y-1">
-            <p className="text-emerald-400">[$] Connecting Claude Agent Client Protocol (ACP) system layer...</p>
-            <p className="text-slate-500">[system] Session ID: {activeThread.sessionId || "initializing…"}</p>
-            <p className="text-[#4ADE80]">[acp] Server connection verified on http://localhost:3000</p>
-            <p className="text-slate-500">[info] Active messages: {messages.length}</p>
-            <p className="text-slate-500">[status] Thread status: {activeThread.status}</p>
-            {activeThread.pendingPermissionId && (
-              <p className="text-amber-400">[warning] Awaiting permission response (ID: {activeThread.pendingPermissionId})</p>
+            {threadLogs.length === 0 ? (
+              <p className="text-slate-600 italic">No ACP messages logged yet for this thread.</p>
+            ) : (
+              threadLogs.map((log, i) => {
+                const time = new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                return (
+                  <p key={i} className="leading-relaxed border-b border-white/5 pb-1 last:border-none">
+                    <span className="text-emerald-500 font-bold mr-1">&gt;&gt;</span>
+                    <span className="text-slate-600 mr-2">{time}</span>
+                    <span className={`mr-1 ${log.level === 'error' ? 'text-red-400' : 'text-cyan-400'}`}>
+                      [{log.component}]
+                    </span>
+                    <span className="text-slate-400">{log.message}</span>
+                  </p>
+                );
+              })
             )}
-            <p className="text-slate-500">[log] Ready to receive ACP notifications…</p>
           </div>
         </div>
       )}
@@ -535,10 +555,56 @@ export default function ChatCanvas({
               );
             }
 
-            // Permission request - hide since approval status is now shown inline with tool calls
+            // Permission request - render as interactive bubble with allow/deny buttons
             if (parsed.type === "permission") {
-              // Permission requests are now handled inline with tool UI, skip rendering
-              return null;
+              const { toolCall, options, permissionId } = parsed.content;
+
+              // If already responded to, don't show the prompt again
+              const currentMsgIdx = messages.indexOf(msg);
+              const alreadyAnswered = messages.slice(currentMsgIdx + 1).some(
+                (m) => m.type === "permission_response"
+              );
+              if (alreadyAnswered) return null;
+
+              return (
+                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn">
+                  <div className="w-8 h-8 bg-amber-500/20 border border-amber-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(245,158,11,0.15)] select-none">
+                    <ShieldAlert size={16} className="text-amber-400 animate-pulse" />
+                  </div>
+                  <div className="flex-1 max-w-[90%]">
+                    <div className="border border-amber-500/30 rounded-xl overflow-hidden bg-amber-500/5">
+                      <div className="px-4 py-3 bg-amber-500/10 border-b border-amber-500/20 select-none">
+                        <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-400">Permission Required</p>
+                        <p className="text-sm text-amber-200 mt-1 font-medium">{toolCall?.title}</p>
+                        {toolCall?.kind && (
+                          <p className="text-[10px] text-amber-400/60 mt-0.5 font-mono">kind: {toolCall.kind}</p>
+                        )}
+                      </div>
+                      <div className="px-4 py-3 flex flex-wrap gap-2">
+                        {(options ?? []).map((opt: { optionId: string; name: string; kind: string }) => {
+                          let btnClass = "px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer active:scale-95 ";
+                          if (opt.kind === "allow_always") {
+                            btnClass += "bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30";
+                          } else if (opt.kind === "allow_once") {
+                            btnClass += "bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30";
+                          } else {
+                            btnClass += "bg-transparent border-white/20 text-slate-300 hover:bg-white/5";
+                          }
+                          return (
+                            <button
+                              key={opt.optionId}
+                              className={btnClass}
+                              onClick={() => onPermissionResponse(opt.optionId)}
+                            >
+                              {opt.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
             }
 
             // Permission response (user's approval/denial choice) - now embedded in tool UI
@@ -675,10 +741,32 @@ export default function ChatCanvas({
       </div>
 
       {/* Floating active status thinking pulse */}
-      {(activeThread.status === "thinking" || activeThread.status === "running") && (
-        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 bg-[#0E0E11] border border-emerald-500/20 text-emerald-300 font-mono text-[11px] px-4 py-1.5 rounded-full flex items-center gap-2 shadow-2xl select-none z-10">
-          <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-ping" />
-          <span>Claude AI agent executing local refactor loop...</span>
+      {(activeThread.status === "thinking" || activeThread.status === "running" || activeThread.status === "awaiting_permission") && (
+        <div className={`absolute bottom-24 left-1/2 -translate-x-1/2 bg-[#0E0E11] border text-emerald-300 font-mono text-[11px] px-4 py-1.5 rounded-full flex items-center gap-2 shadow-2xl select-none z-10 ${
+          activeThread.status === "awaiting_permission"
+            ? "border-amber-500/30"
+            : "border-emerald-500/20"
+        }`}>
+          <div className={`w-2 h-2 rounded-full shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-ping ${
+            activeThread.status === "awaiting_permission"
+              ? "bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]"
+              : "bg-emerald-500"
+          }`} />
+          <span>
+            {activeThread.status === "awaiting_permission"
+              ? "Awaiting your approval..."
+              : activeThread.status === "running"
+                ? "Claude is executing..."
+                : "Claude is thinking..."}
+          </span>
+        </div>
+      )}
+
+      {/* Error pill — shows after a failed turn, dismisses on next message */}
+      {!isAgentBusy && activeThread.lastError && (
+        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 bg-red-500/10 border border-red-500/30 text-red-300 font-mono text-[11px] px-4 py-1.5 rounded-full flex items-center gap-2 shadow-2xl select-none z-10">
+          <XCircle size={12} className="text-red-400" />
+          <span>Agent stopped: {activeThread.lastError}</span>
         </div>
       )}
 
@@ -695,28 +783,39 @@ export default function ChatCanvas({
               <Paperclip size={16} />
             </button>
             
-            <textarea 
+            <textarea
               value={inputText}
               onChange={(e) => onChangeInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              className="flex-1 bg-transparent border-none focus:outline-none focus:ring-0 text-sm font-sans text-slate-200 placeholder-slate-600 resize-none py-1.5 h-10 max-h-40 overflow-y-auto custom-scrollbar" 
-              placeholder="Type a command or ask Claude to do something..."
+              disabled={isAgentBusy}
+              className="flex-1 bg-transparent border-none focus:outline-none focus:ring-0 text-sm font-sans text-slate-200 placeholder-slate-600 resize-none py-1.5 h-10 max-h-40 overflow-y-auto custom-scrollbar disabled:opacity-40 disabled:cursor-not-allowed"
+              placeholder={isAgentBusy ? "Agent is busy..." : "Type a command or ask Claude to do something..."}
               rows={1}
               style={{ caretColor: "#10b981" }}
             />
 
-            <button 
-              onClick={onSendMessage}
-              disabled={!inputText.trim()}
-              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
-                inputText.trim() 
-                  ? "bg-emerald-500 text-black hover:bg-emerald-400" 
-                  : "bg-white/5 text-slate-600 cursor-not-allowed"
-              }`}
-              title="Stream instructions"
-            >
-              <Send size={16} />
-            </button>
+            {isAgentBusy ? (
+              <button
+                onClick={onCancelAgent}
+                className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors cursor-pointer"
+                title="Cancel agent turn"
+              >
+                <Square size={16} />
+              </button>
+            ) : (
+              <button
+                onClick={onSendMessage}
+                disabled={!inputText.trim()}
+                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
+                  inputText.trim()
+                    ? "bg-emerald-500 text-black hover:bg-emerald-400"
+                    : "bg-white/5 text-slate-600 cursor-not-allowed"
+                }`}
+                title="Stream instructions"
+              >
+                <Send size={16} />
+              </button>
+            )}
           </div>
         </div>
       </div>

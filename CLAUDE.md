@@ -29,7 +29,9 @@ DevOS is a multi-agent chat workspace that communicates with Claude agents via t
 
 ### ACP Protocol
 
-Messages use JSON-RPC 2.0. Key methods: `initialize`, `session/new`, `session/load`, `session/prompt`, `session/update`, `session/request_permission`. Permission flow: agent sends `session/request_permission` → UI shows options → user picks → server sends JSON-RPC response with `selected.optionId`.
+Messages use JSON-RPC 2.0. Key methods: `initialize`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `session/update`, `session/request_permission`. Permission flow: agent sends `session/request_permission` → UI shows options → user picks → server sends JSON-RPC response with `selected.optionId`.
+
+**ACP Agent Package**: `@agentclientprotocol/claude-agent-acp` — [GitHub](https://github.com/agentclientprotocol/claude-agent-acp). Spawns via `npx -y` per thread. On Windows, use `npx.cmd` directly (not `shell: true` with `npx`) to avoid `cmd.exe` spawn errors.
 
 ## Environment
 

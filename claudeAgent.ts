@@ -12,6 +12,7 @@
  * instance.send(msg)           – fire-and-forget outbound JSON-RPC
  * instance.rpc(method, params) – awaited outbound RPC (gets a response)
  * instance.kill()
+ * instance.cancel(sessionId?)  – send session/cancel
  *
  * Events emitted:
  *   "message" (raw: object)  – every inbound JSON-RPC line from the subprocess
@@ -21,6 +22,8 @@
 import { spawn, ChildProcess } from "child_process";
 import readline from "readline";
 import { EventEmitter } from "events";
+import fs from "fs";
+import { logInfo, logError } from "./src/logger";
 
 export class ClaudeAgent extends EventEmitter {
   // ---------------------------------------------------------------------------
@@ -64,34 +67,49 @@ export class ClaudeAgent extends EventEmitter {
 
   // ---------------------------------------------------------------------------
   // Initialization (idempotent)
+  //
+  // Two distinct paths:
+  //   - sessionId provided  → this thread already has a session; always resume
+  //                           it via session/load. Never fall through to new.
+  //   - no sessionId        → first message on this thread; create a new session.
   // ---------------------------------------------------------------------------
 
   async initialize(sessionId?: string): Promise<string> {
+    logInfo("acp", `initialize() called, sessionId=${sessionId ?? "none"}, proc=${this.proc ? "alive" : "null"}, initialized=${this.initialized}`, this.threadId);
     if (!this.proc) this.spawnProcess();
 
     if (!this.initialized) {
+      logInfo("acp", 'sending "initialize" RPC...', this.threadId);
       await this.rpc("initialize", {
         protocolVersion: 1,
         capabilities: { agent: {}, filesystem: {}, terminal: {} },
       });
       this.initialized = true;
+      logInfo("acp", "initialized OK", this.threadId);
     }
 
     if (sessionId) {
-      try {
-        await this.rpc("session/load", { sessionId });
-        return sessionId;
-      } catch {
-        // fall through to new session
-      }
+      // Thread already has a session — load it. This must succeed; we never
+      // silently replace an existing session with a new one.
+      logInfo("acp", `sending "session/load" RPC with sessionId=${sessionId}...`, this.threadId);
+      await this.rpc("session/load", {
+        sessionId,
+        cwd: this.workspacePath,
+        mcpServers: [],
+      });
+      logInfo("acp", "session loaded OK", this.threadId);
+      return sessionId;
     }
 
+    // No session yet — create one for this thread.
+    logInfo("acp", 'sending "session/new" RPC...', this.threadId);
     const result = await this.rpc("session/new", {
       cwd: this.workspacePath,
       mcpServers: [],
       permissionMode: "default",
     }) as { sessionId: string };
 
+    logInfo("acp", `session/new OK, sessionId=${result.sessionId}`, this.threadId);
     return result.sessionId;
   }
 
@@ -100,9 +118,13 @@ export class ClaudeAgent extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   send(msg: object): void {
-    console.log("[SEND_MESSAGE]", msg);
-    if (!this.proc) this.spawnProcess();
+    logInfo("acp", `SEND: ${JSON.stringify(msg)}`, this.threadId);
+    if (!this.proc) {
+      logInfo("acp", "no proc, spawning...", this.threadId);
+      this.spawnProcess();
+    }
     this.proc!.stdin!.write(JSON.stringify(msg) + "\n");
+    logInfo("acp", "SEND complete", this.threadId);
   }
 
   // ---------------------------------------------------------------------------
@@ -110,11 +132,29 @@ export class ClaudeAgent extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   rpc(method: string, params: unknown): Promise<unknown> {
-    if (!this.proc) this.spawnProcess();
+    logInfo("acp", `RPC: ${method} ${JSON.stringify(params)}`, this.threadId);
+    if (!this.proc) {
+      logInfo("acp", "no proc for RPC, spawning...", this.threadId);
+      this.spawnProcess();
+    }
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
       this.pendingRpc.set(id, { resolve, reject });
       this.proc!.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+      logInfo("acp", `RPC sent: id=${id} method=${method}`, this.threadId);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cancel: send session/cancel to the ACP subprocess
+  // ---------------------------------------------------------------------------
+
+  cancel(sessionId?: string): void {
+    logInfo("acp", `CANCEL, sessionId=${sessionId ?? "none"}`, this.threadId);
+    this.send({
+      jsonrpc: "2.0",
+      method: "session/cancel",
+      params: sessionId ? { sessionId } : {},
     });
   }
 
@@ -123,6 +163,7 @@ export class ClaudeAgent extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   kill(): void {
+    logInfo("acp", "KILL", this.threadId);
     this.proc?.kill();
     this.proc = null;
     this.initialized = false;
@@ -133,36 +174,71 @@ export class ClaudeAgent extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private spawnProcess(): void {
-    this.proc = spawn("npx", ["-y", "@agentclientprotocol/claude-agent-acp"], {
-      cwd: this.workspacePath,
+    logInfo("acp", `SPAWN: npx -y @agentclientprotocol/claude-agent-acp in ${this.workspacePath}`, this.threadId);
+    // On Windows, spawn with shell:true + args array triggers DEP0190 and can
+    // fail with ENOENT on cmd.exe. Use the platform-specific npx binary instead
+    // so we can keep shell:false and let the OS resolve the executable directly.
+    const isWindows = process.platform === "win32";
+    const cmd = isWindows ? "npx.cmd" : "npx";
+
+    // Validate cwd exists — fall back to process.cwd() if not (e.g. Unix paths on Windows)
+    const resolvedCwd = fs.existsSync(this.workspacePath) ? this.workspacePath : process.cwd();
+    if (resolvedCwd !== this.workspacePath) {
+      logInfo("acp", `WARNING: workspacePath "${this.workspacePath}" does not exist, falling back to "${resolvedCwd}"`, this.threadId);
+    }
+
+    this.proc = spawn(cmd, ["-y", "@agentclientprotocol/claude-agent-acp"], {
+      cwd: resolvedCwd,
       shell: true,
       env: { ...process.env },
+    });
+
+    logInfo("acp", `process spawned, pid=${this.proc.pid}`, this.threadId);
+
+    this.proc.on("error", (err) => {
+      logError("acp", `SPAWN ERROR: ${err.message}`, this.threadId);
+      this.proc = null;
+      this.initialized = false;
+      this.emit("close");
+    });
+
+    this.proc.on("exit", (code, signal) => {
+      logInfo("acp", `PROCESS EXIT: code=${code} signal=${signal}`, this.threadId);
     });
 
     const rl = readline.createInterface({ input: this.proc.stdout!, terminal: false });
 
     rl.on("line", (line) => {
-      console.log("[LINE]", line)
+      logInfo("acp", `STDOUT: ${line}`, this.threadId);
       let msg: any;
-      try { msg = JSON.parse(line); } catch { return; }
+      try { msg = JSON.parse(line); } catch {
+        logInfo("acp", "non-JSON line, ignoring", this.threadId);
+        return;
+      }
 
       // Resolve pending awaited RPCs
       if ("id" in msg && ("result" in msg || "error" in msg)) {
         const pending = this.pendingRpc.get(msg.id);
         if (pending) {
           this.pendingRpc.delete(msg.id);
+          logInfo("acp", `RPC response: id=${msg.id} ${msg.error ? `error=${JSON.stringify(msg.error)}` : "ok"}`, this.threadId);
           msg.error ? pending.reject(msg.error) : pending.resolve(msg.result);
-          return; // don't also emit — these are internal handshakes
+          // Also emit so wireAgent can see stopReason, etc.
         }
       }
 
       // Everything else (inbound requests + notifications) bubbles up raw
+      logInfo("acp", `EMIT message: ${msg.method ?? "response"}`, this.threadId);
       this.emit("message", msg);
     });
 
-    this.proc.stderr!.on("data", (d) => console.error(`[acp:${this.threadId}]`, d.toString()));
+    this.proc.stderr!.on("data", (d) => {
+      const text = d.toString().trim();
+      if (text) logError("acp", `STDERR: ${text}`, this.threadId);
+    });
 
-    this.proc.on("close", () => {
+    this.proc.on("close", (code) => {
+      logInfo("acp", `PROCESS CLOSED: code=${code}`, this.threadId);
       this.proc = null;
       this.initialized = false;
       this.emit("close");

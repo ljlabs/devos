@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   Laptop, 
   Cpu, 
@@ -36,7 +36,10 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [globalLogs, setGlobalLogs] = useState<string[]>([]);
+  const [threadLogs, setThreadLogs] = useState<Record<string, any[]>>({});
   const [searchResult, setSearchResult] = useState<any[]>([]);
+  const threadSseRef = useRef<EventSource | null>(null);
+  const globalSseRef = useRef<EventSource | null>(null);
 
   // Dialog states
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
@@ -104,20 +107,59 @@ export default function App() {
     const initialize = async () => {
       setIsLoading(true);
       await fetchWorkspaces();
-      
-      // Setup mock global system logs for activity tab
-      setGlobalLogs([
-        `[${new Date(Date.now() - 3600000).toLocaleTimeString()}] DevOS ACP Background state controller initialized.`,
-        `[${new Date(Date.now() - 3200000).toLocaleTimeString()}] Connected local folders to SQLite single-file database.`,
-        `[${new Date(Date.now() - 2800000).toLocaleTimeString()}] Registered workspace project: frontend-auth`,
-        `[${new Date(Date.now() - 2400000).toLocaleTimeString()}] Bound Claude Code client thread 'Refactor API' to port 3000`,
-        `[${new Date(Date.now() - 120000).toLocaleTimeString()}] User submitted workspace query: 'Refactor routes.js'`,
-        `[${new Date(Date.now() - 90000).toLocaleTimeString()}] Claude Code triggered ACP action: 'rm -rf dist && npm run build' (Pending Clearance)`
-      ]);
-      
       setIsLoading(false);
     };
     initialize();
+  }, []);
+
+  // SSE: Thread log streaming for active thread
+  useEffect(() => {
+    if (threadSseRef.current) {
+      threadSseRef.current.close();
+      threadSseRef.current = null;
+    }
+    if (!activeThreadId) return;
+
+    const es = new EventSource(`/api/threads/${activeThreadId}/logs`);
+    threadSseRef.current = es;
+
+    es.onmessage = (event) => {
+      try {
+        const log = JSON.parse(event.data);
+        setThreadLogs(prev => ({
+          ...prev,
+          [activeThreadId]: [log, ...(prev[activeThreadId] || [])],
+        }));
+      } catch {}
+    };
+
+    return () => {
+      es.close();
+      threadSseRef.current = null;
+    };
+  }, [activeThreadId]);
+
+  // SSE: Global activity log streaming
+  useEffect(() => {
+    const es = new EventSource("/api/logs");
+    globalSseRef.current = es;
+
+    es.onmessage = (event) => {
+      try {
+        const log = JSON.parse(event.data);
+        if (log.thread_id) {
+          setGlobalLogs(prev => [
+            `[${new Date(log.timestamp).toLocaleTimeString()}] [${log.component}:${log.thread_id.slice(0, 12)}] ${log.message}`,
+            ...prev
+          ]);
+        }
+      } catch {}
+    };
+
+    return () => {
+      es.close();
+      globalSseRef.current = null;
+    };
   }, []);
 
   // Update threads when active workspace changes
@@ -138,6 +180,13 @@ export default function App() {
 
   const activeThread = threads.find(t => t.id === activeThreadId) || null;
   const activeThreadStatus = activeThread?.status;
+  const activeThreadLogs = activeThreadId ? (threadLogs[activeThreadId] || []) : [];
+
+  const handleClearThreadLogs = () => {
+    if (activeThreadId) {
+      setThreadLogs(prev => ({ ...prev, [activeThreadId]: [] }));
+    }
+  };
 
   // Polling state helper to update message states or threads status
   useEffect(() => {
@@ -263,6 +312,26 @@ export default function App() {
     }
   };
 
+  // Cancel agent turn
+  const handleCancelAgent = async () => {
+    if (!activeThreadId) return;
+    try {
+      const res = await fetch(`/api/threads/${activeThreadId}/cancel`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        setGlobalLogs(prev => [
+          `[${new Date().toLocaleTimeString()}] Agent turn cancelled`,
+          ...prev
+        ]);
+        await fetchMessages(activeThreadId);
+        await fetchThreads(activeWorkspaceId);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   // Deploy Cloud Run action simulation
   const handleDeploy = () => {
     setIsDeploying(true);
@@ -333,9 +402,12 @@ export default function App() {
             inputText={inputText}
             onChangeInput={setInputText}
             onSendMessage={handleSendMessage}
+            onCancelAgent={handleCancelAgent}
             onPermissionResponse={handlePermissionResponse}
             onDeploy={handleDeploy}
             isDeploying={isDeploying}
+            threadLogs={activeThreadLogs}
+            onClearThreadLogs={handleClearThreadLogs}
           />
         </>
       )}
