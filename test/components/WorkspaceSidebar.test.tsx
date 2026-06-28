@@ -10,6 +10,7 @@ const mockOnEditWorkspace = vi.fn();
 const mockOnDeleteWorkspace = vi.fn();
 const mockOnSelectView = vi.fn();
 const mockOnToggleCollapse = vi.fn();
+const mockOnOpenSettings = vi.fn();
 
 const baseProps = {
   workspaces: [] as Workspace[],
@@ -22,6 +23,7 @@ const baseProps = {
   onSelectView: mockOnSelectView,
   collapsed: false,
   onToggleCollapse: mockOnToggleCollapse,
+  onOpenSettings: mockOnOpenSettings,
 };
 
 const sampleWorkspaces: Workspace[] = [
