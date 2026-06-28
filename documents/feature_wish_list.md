@@ -1,3 +1,3 @@
-1. when i create a workspace or a conversation id like to be able to change the name of the conversation.
-2. when i create a workspace, clicking new thread just creates a new thread with a placeholder name, and the acp agent will go ahead and rename the thread using the title response. Do not show me a modal requesting a name, its unimportant, and just wastes time.
-3. a way to delete groups or threads is important
+1. I would like the chat box to expand as i keep adding new lines. this expansion needs to stop at 10 lines, at which case i need to rely on scrolling in the caht box.
+2. When i insert multiple lines in the chat box i cannot see multiple lines in my message in the chat window
+3. when i click always allow, id also like the option to allow similar. this means we need a allow similar section to the db, basiccally just allow *
