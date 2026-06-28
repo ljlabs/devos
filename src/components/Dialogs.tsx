@@ -31,6 +31,7 @@ export function WorkspaceModal({
   if (!isOpen) return null;
 
   const isEditing = !!editingWorkspace;
+  const displayPath = path || (name.trim() ? `/projects/${name.trim()}` : "/projects/...");
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
@@ -52,7 +53,7 @@ export function WorkspaceModal({
 
           <p className="text-xs text-slate-400 font-sans leading-relaxed">
             {isEditing
-              ? "Update the workspace name or directory path."
+              ? "Update the workspace name."
               : "Specify a workspace directory. DevOS will map code trees in this folder to isolated threads."}
           </p>
 
@@ -77,10 +78,15 @@ export function WorkspaceModal({
               </label>
               <input
                 type="text"
-                value={path}
-                disabled
+                value={isEditing ? path : displayPath}
+                disabled={isEditing}
+                onChange={(e) => !isEditing && setPath(e.target.value)}
                 placeholder="/Users/developer/projects/..."
-                className="w-full bg-[#18181B] border border-white/5 rounded-lg px-3 py-2 text-sm text-slate-500 font-mono cursor-not-allowed"
+                className={`w-full bg-[#18181B] rounded-lg px-3 py-2 text-sm font-mono transition-colors ${
+                  isEditing
+                    ? "border border-white/5 text-slate-500 cursor-not-allowed"
+                    : "border border-white/10 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500"
+                }`}
               />
             </div>
           </div>
