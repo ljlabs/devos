@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Readable, Writable } from "stream";
 import { EventEmitter } from "events";
 import readline from "readline";
-import { ClaudeAgent } from "../../claudeAgent";
+import { ClaudeAgent } from "../../server_src/claudeAgent";
 
 vi.spyOn(console, "log").mockImplementation(() => {});
 vi.spyOn(console, "error").mockImplementation(() => {});
@@ -272,20 +272,28 @@ describe("ClaudeAgent — Unhappy Path", () => {
   // ── send() after kill ──────────────────────────────────────────────────
 
   describe("send() after kill()", () => {
-    it("auto-spawns a new process when proc is null", () => {
+    it("throws when workspace path does not exist", () => {
       const agent = ClaudeAgent.getInstance("thread-send-after-kill", "/ws");
       injectProc(agent, mockProc);
 
       agent.kill();
       expect((agent as any).proc).toBeNull();
 
-      // send() should auto-spawn — we verify by checking that the agent
-      // calls spawnProcess (which sets this.proc). In a real scenario this
-      // would spawn a new npx process; here the mock replaces it.
-      // The key assertion: no crash on send after kill.
-      expect(() => {
-        agent.send({ jsonrpc: "2.0", method: "test", params: {} });
-      }).not.toThrow();
+      // send() should try to auto-spawn, but workspace path /ws doesn't exist
+      // so it should emit an error instead of crashing
+      let errorEmitted = false;
+      let errorMessage = "";
+      agent.on("error", (err) => {
+        errorEmitted = true;
+        errorMessage = err.message;
+      });
+
+      // send() calls spawnProcess which now validates the path exists
+      agent.send({ jsonrpc: "2.0", method: "test", params: {} });
+
+      // Process should not have been spawned due to invalid path
+      expect((agent as any).proc).toBeNull();
+      expect(errorEmitted || errorMessage.includes("does not exist")).toBe(true);
     });
   });
 
@@ -590,28 +598,29 @@ describe("ClaudeAgent — Unhappy Path", () => {
   // ── spawnProcess cwd fallback ───────────────────────────────────────────
 
   describe("spawnProcess() cwd fallback", () => {
-    it("falls back to process.cwd() when workspacePath doesn't exist", async () => {
-      // Test the cwd fallback logic by creating an agent with a nonexistent path
-      // and verifying the behavior through the spawn attempt.
-      // Since we can't easily intercept the ESM spawn import, we test this
-      // indirectly: spawnProcess() should not throw even with invalid path,
-      // and the agent should attempt to spawn (proc becomes non-null or errors).
+    it("throws error when workspacePath doesn't exist", async () => {
+      // Test that spawnProcess now validates the workspace path exists
+      // and rejects with an error instead of falling back to process.cwd().
       const agent = ClaudeAgent.getInstance("thread-spawn-fallback", "/nonexistent/path/that/does/not/exist");
 
-      // The spawn will actually fail (npx won't be found or workspace invalid),
-      // but the important thing is that it doesn't crash with ENOENT on the cwd.
-      // We verify by checking that the agent handles this gracefully.
+      // spawnProcess() now validates that workspacePath exists
+      // and emits an error instead of silently falling back.
       let errorEmitted = false;
-      agent.on("close", () => { errorEmitted = true; });
+      let errorMsg = "";
+      agent.on("error", (err) => {
+        errorEmitted = true;
+        errorMsg = err.message;
+      });
 
-      // spawnProcess() is called internally — it should use the fallback cwd
-      // and attempt to spawn. The process may fail, but that's OK.
-      expect(() => {
-        (agent as any).spawnProcess();
-      }).not.toThrow();
+      // spawnProcess() is called — it should reject the invalid path
+      (agent as any).spawnProcess();
 
-      // The proc should have been set (spawn was called, even if it will fail later)
-      expect((agent as any).proc).not.toBeNull();
+      // The proc should not have been set because the path is invalid
+      expect((agent as any).proc).toBeNull();
+      
+      // Error should have been emitted with a message about the path not existing
+      expect(errorEmitted).toBe(true);
+      expect(errorMsg).toContain("does not exist");
 
       // Clean up
       agent.kill();

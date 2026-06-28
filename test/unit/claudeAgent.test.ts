@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Readable, Writable } from "stream";
 import { EventEmitter } from "events";
 import readline from "readline";
-import { ClaudeAgent } from "../../claudeAgent";
+import { ClaudeAgent } from "../../server_src/claudeAgent";
 
 // Suppress console output
 vi.spyOn(console, "log").mockImplementation(() => {});

@@ -9,53 +9,46 @@ describe("derivePatternVariants", () => {
 
   it("returns only exact variant for single-part command", () => {
     const result = derivePatternVariants("python");
-    // Single-part commands only get exact variant (no script part to create exe-level variant)
     expect(result).toHaveLength(1);
-    expect(result[0]).toEqual({ label: "Exact: python", pattern: "python" });
+    expect(result[0]).toEqual({ label: "python", pattern: "python" });
   });
 
-  it("preserves full paths in labels (not basenames)", () => {
+  it("preserves full paths in patterns (not basenames)", () => {
     const command = "C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe C:/Users/jorda/.claude/skills/web-search/main.py --arg value";
     const result = derivePatternVariants(command);
 
-    // Should have: exact, script-level wildcard, exe-level wildcard
     expect(result.length).toBeGreaterThanOrEqual(3);
 
-    // First variant should be exact with full command
+    // First variant: exact
     expect(result[0].pattern).toBe(command);
-    expect(result[0].label).toContain(command);
+    expect(result[0].label).toBe(command);
 
-    // Script-level variant should have full exe and script paths
-    expect(result[1].label).toContain("C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe");
-    expect(result[1].label).toContain("C:/Users/jorda/.claude/skills/web-search/main.py");
+    // Script-level variant: full paths in pattern
     expect(result[1].pattern).toBe(
       "C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe C:/Users/jorda/.claude/skills/web-search/main.py *"
     );
 
-    // Exe-level variant should have full exe path
-    expect(result[2].label).toContain("C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe");
+    // Exe-level variant: full exe path in pattern, basename in label
     expect(result[2].pattern).toBe("C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe *");
+    expect(result[2].label).toBe("python.exe *");
   });
 
-  it("shows 'any args to this script' description for script-level variant", () => {
+  it("label for script-level variant is the pattern itself", () => {
     const command = "C:/Users/jorda/python.exe C:/Users/jorda/main.py arg1 arg2";
     const result = derivePatternVariants(command);
 
-    const scriptVariant = result.find((v) => v.label.includes("(any args to this script)"));
+    const scriptVariant = result.find(v => v.pattern === "C:/Users/jorda/python.exe C:/Users/jorda/main.py *");
     expect(scriptVariant).toBeDefined();
-    expect(scriptVariant?.pattern).toBe(
-      "C:/Users/jorda/python.exe C:/Users/jorda/main.py *"
-    );
+    expect(scriptVariant?.label).toBe("C:/Users/jorda/python.exe C:/Users/jorda/main.py *");
   });
 
-  it("shows 'any command via' description for exe-level variant", () => {
+  it("label for exe-level variant uses basename", () => {
     const command = "C:/Users/jorda/python.exe C:/Users/jorda/main.py";
     const result = derivePatternVariants(command);
 
-    const exeVariant = result.find((v) => v.label.includes("(any command via"));
+    const exeVariant = result.find(v => v.pattern === "C:/Users/jorda/python.exe *");
     expect(exeVariant).toBeDefined();
-    expect(exeVariant?.label).toContain("python.exe"); // basename in description
-    expect(exeVariant?.pattern).toContain("C:/Users/jorda/python.exe"); // full path in pattern
+    expect(exeVariant?.label).toBe("python.exe *");
   });
 
   it("does not duplicate variants", () => {
@@ -142,23 +135,18 @@ describe("derivePatternVariants", () => {
 
     // Exact
     expect(result[0].pattern).toBe(command);
+    expect(result[0].label).toBe(command);
 
     // Script-level
     expect(result[1].pattern).toBe(
       "C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe C:/Users/jorda/.claude/skills/web-search/main.py *"
     );
 
-    // Exe-level
+    // Exe-level: label is basename, pattern is full path
     expect(result[2].pattern).toBe(
       "C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe *"
     );
-
-    // All labels should contain full paths
-    result.forEach((variant) => {
-      if (variant.pattern.includes("C:/Users/jorda/.claude")) {
-        expect(variant.label).toContain("C:/Users/jorda/.claude");
-      }
-    });
+    expect(result[2].label).toBe("python.exe *");
   });
 
   it("real-world example: npm build command", () => {

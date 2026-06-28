@@ -35,7 +35,7 @@ import { spawn, ChildProcess } from "child_process";
 import readline from "readline";
 import { EventEmitter } from "events";
 import fs from "fs";
-import { logInfo, logError } from "./src/logger";
+import { logInfo, logError } from "../src/logger";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -304,7 +304,14 @@ export class ClaudeAgent extends EventEmitter {
       logInfo("acp", "no proc, spawning...", this.threadId);
       this.spawnProcess();
     }
-    this.proc!.stdin!.write(JSON.stringify(msg) + "\n");
+    
+    // If proc is still null after spawn attempt (e.g., invalid path), don't try to write
+    if (!this.proc) {
+      logError("acp", "cannot send: proc failed to spawn (invalid workspace path?)", this.threadId);
+      return;
+    }
+    
+    this.proc.stdin!.write(JSON.stringify(msg) + "\n");
     logInfo("acp", "SEND complete", this.threadId);
   }
 
@@ -404,13 +411,16 @@ export class ClaudeAgent extends EventEmitter {
     const isWindows = process.platform === "win32";
     const cmd = isWindows ? "npx.cmd" : "npx";
 
-    const resolvedCwd = fs.existsSync(this.workspacePath) ? this.workspacePath : process.cwd();
-    if (resolvedCwd !== this.workspacePath) {
-      logInfo("acp", `WARNING: workspacePath "${this.workspacePath}" does not exist, falling back to "${resolvedCwd}"`, this.threadId);
+    // Validate workspace path exists before spawning
+    if (!fs.existsSync(this.workspacePath)) {
+      const err = new Error(`Workspace path does not exist: ${this.workspacePath}`);
+      logError("acp", `SPAWN ERROR: ${err.message}`, this.threadId);
+      this.emit("error", err);
+      return;
     }
 
     this.proc = spawn(cmd, ["-y", "@agentclientprotocol/claude-agent-acp"], {
-      cwd: resolvedCwd,
+      cwd: this.workspacePath,
       shell: true,
       env: { ...process.env },
     });

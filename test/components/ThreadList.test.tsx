@@ -98,7 +98,7 @@ describe("ThreadList", () => {
 
       // Find the rename button for the first thread
       const threadItem = screen.getByText("Thread One").closest("div.group")!;
-      const renameBtn = within(threadItem).getByTitle("Rename thread");
+      const renameBtn = within(threadItem as HTMLElement).getByTitle("Rename thread");
       await user.click(renameBtn);
 
       // Should now show an input
@@ -112,7 +112,7 @@ describe("ThreadList", () => {
       render(<ThreadList {...baseProps} threads={sampleThreads} />);
 
       const threadItem = screen.getByText("Thread One").closest("div.group")!;
-      const renameBtn = within(threadItem).getByTitle("Rename thread");
+      const renameBtn = within(threadItem as HTMLElement).getByTitle("Rename thread");
       await user.click(renameBtn);
 
       const input = threadItem.querySelector("input")!;
@@ -127,7 +127,7 @@ describe("ThreadList", () => {
       render(<ThreadList {...baseProps} threads={sampleThreads} />);
 
       const threadItem = screen.getByText("Thread One").closest("div.group")!;
-      const renameBtn = within(threadItem).getByTitle("Rename thread");
+      const renameBtn = within(threadItem as HTMLElement).getByTitle("Rename thread");
       await user.click(renameBtn);
 
       const input = threadItem.querySelector("input")!;
@@ -143,7 +143,7 @@ describe("ThreadList", () => {
       render(<ThreadList {...baseProps} threads={sampleThreads} />);
 
       const threadItem = screen.getByText("Thread One").closest("div.group")!;
-      const renameBtn = within(threadItem).getByTitle("Rename thread");
+      const renameBtn = within(threadItem as HTMLElement).getByTitle("Rename thread");
       await user.click(renameBtn);
 
       const input = threadItem.querySelector("input")!;
@@ -161,7 +161,7 @@ describe("ThreadList", () => {
       render(<ThreadList {...baseProps} threads={sampleThreads} />);
 
       const threadItem = screen.getByText("Thread One").closest("div.group")!;
-      const deleteBtn = within(threadItem).getByTitle("Delete thread");
+      const deleteBtn = within(threadItem as HTMLElement).getByTitle("Delete thread");
       await user.click(deleteBtn);
 
       expect(window.confirm).toHaveBeenCalledWith('Delete "Thread One"?');
@@ -174,7 +174,7 @@ describe("ThreadList", () => {
       render(<ThreadList {...baseProps} threads={sampleThreads} />);
 
       const threadItem = screen.getByText("Thread One").closest("div.group")!;
-      const deleteBtn = within(threadItem).getByTitle("Delete thread");
+      const deleteBtn = within(threadItem as HTMLElement).getByTitle("Delete thread");
       await user.click(deleteBtn);
 
       expect(mockOnDeleteThread).not.toHaveBeenCalled();

@@ -88,7 +88,7 @@ describe("WorkspaceSidebar", () => {
       const user = userEvent.setup();
       render(<WorkspaceSidebar {...baseProps} workspaces={sampleWorkspaces} />);
       const wsItem = screen.getByText("Backend API").closest("div.group")!;
-      const settingsBtn = within(wsItem).getByTitle("Edit workspace");
+      const settingsBtn = within(wsItem as HTMLElement).getByTitle("Edit workspace");
       await user.click(settingsBtn);
       expect(mockOnEditWorkspace).toHaveBeenCalledWith("ws-1");
     });
@@ -99,7 +99,7 @@ describe("WorkspaceSidebar", () => {
       const user = userEvent.setup();
       render(<WorkspaceSidebar {...baseProps} workspaces={sampleWorkspaces} />);
       const wsItem = screen.getByText("Backend API").closest("div.group")!;
-      const deleteBtn = within(wsItem).getByTitle("Delete workspace");
+      const deleteBtn = within(wsItem as HTMLElement).getByTitle("Delete workspace");
       await user.click(deleteBtn);
       expect(window.confirm).toHaveBeenCalledWith('Delete workspace "Backend API" and all its threads?');
       expect(mockOnDeleteWorkspace).toHaveBeenCalledWith("ws-1");
@@ -110,7 +110,7 @@ describe("WorkspaceSidebar", () => {
       const user = userEvent.setup();
       render(<WorkspaceSidebar {...baseProps} workspaces={sampleWorkspaces} />);
       const wsItem = screen.getByText("Backend API").closest("div.group")!;
-      const deleteBtn = within(wsItem).getByTitle("Delete workspace");
+      const deleteBtn = within(wsItem as HTMLElement).getByTitle("Delete workspace");
       await user.click(deleteBtn);
       expect(mockOnDeleteWorkspace).not.toHaveBeenCalled();
     });

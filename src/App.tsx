@@ -35,6 +35,7 @@ export default function App() {
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
   const [workspaceName, setWorkspaceName] = useState("");
   const [workspacePath, setWorkspacePath] = useState("");
+  const [workspaceError, setWorkspaceError] = useState("");
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
 
@@ -209,6 +210,10 @@ export default function App() {
             `[${new Date().toLocaleTimeString()}] Updated workspace: ${workspaceName}`,
             ...prev
           ]);
+        } else {
+          const error = await res.json();
+          setWorkspaceError(error.error || "Failed to update workspace");
+          return;
         }
       } else {
         const res = await fetch("/api/workspaces", {
@@ -224,13 +229,19 @@ export default function App() {
             `[${new Date().toLocaleTimeString()}] Registered new local workspace project: ${workspaceName}`,
             ...prev
           ]);
+        } else {
+          const error = await res.json();
+          setWorkspaceError(error.error || "Failed to create workspace");
+          return;
         }
       }
       setWorkspaceName("");
       setWorkspacePath("");
+      setWorkspaceError("");
       setEditingWorkspace(null);
       setShowWorkspaceModal(false);
     } catch (e) {
+      setWorkspaceError(e instanceof Error ? e.message : "An unexpected error occurred");
       console.error(e);
     }
   };
@@ -352,13 +363,13 @@ export default function App() {
   };
 
   // Handle permission response from ACP permission request
-  const handlePermissionResponse = async (optionId: string, toolCommand?: string) => {
+  const handlePermissionResponse = async (optionId: string, toolCommand?: string, toolName?: string) => {
     if (!activeThreadId) return;
     try {
       const res = await fetch(`/api/threads/${activeThreadId}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ optionId, toolCommand })
+        body: JSON.stringify({ optionId, toolCommand, toolName })
       });
       if (res.ok) {
         setGlobalLogs(prev => [
@@ -457,6 +468,7 @@ export default function App() {
             isDeploying={isDeploying}
             threadLogs={activeThreadLogs}
             onClearThreadLogs={handleClearThreadLogs}
+            workspacePath={workspaces.find(w => w.id === activeWorkspaceId)?.path}
           />
         </>
       )}
@@ -497,13 +509,18 @@ export default function App() {
       {/* --- MODAL DIALOGS --- */}
       <WorkspaceModal
         isOpen={showWorkspaceModal}
-        onClose={() => setShowWorkspaceModal(false)}
+        onClose={() => {
+          setShowWorkspaceModal(false);
+          setWorkspaceError("");
+        }}
         editingWorkspace={editingWorkspace}
         name={workspaceName}
         setName={setWorkspaceName}
         path={workspacePath}
         setPath={setWorkspacePath}
         onSubmit={handleWorkspaceSubmit}
+        error={workspaceError}
+        setError={setWorkspaceError}
       />
 
       <SettingsModal

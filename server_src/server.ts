@@ -20,14 +20,14 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { ClaudeAgent } from "./claudeAgent";
-import { DatabaseSchema, Workspace, Thread, Message } from "./src/types";
-import { logInfo, logError, getLogs } from "./src/logger";
+import { DatabaseSchema, Workspace, Thread, Message } from "../src/types";
+import { logInfo, logError, getLogs } from "../src/logger";
 
 dotenv.config();
 
 const app = express();
 const PORT = parseInt(process.env.PORT || "3000", 10);
-const DB_FILE = path.join(process.cwd(), "db.json");
+const DB_FILE = process.env.DB_FILE || path.join(process.cwd(), "db.json");
 const WORKSPACES_DIR = path.join(process.cwd(), "sandbox_workspaces");
 
 app.use(express.json());
@@ -145,11 +145,18 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
     // "auto_approved" record so the chat log shows what happened.
     // -----------------------------------------------------------------------
     if (raw.method === "session/request_permission") {
-      const toolCommand = raw.params?.toolCall?.rawInput?.command;
+      const rawInput = raw.params?.toolCall?.rawInput ?? {};
+      const toolCommand: string = rawInput.command ?? rawInput.file_path ?? rawInput.path ?? "";
+      const toolName: string | undefined =
+        raw.params?.toolCall?._meta?.claudeCode?.toolName ??
+        raw.params?._meta?.claudeCode?.toolName ??
+        (typeof raw.params?.toolCall?.title === "string"
+          ? raw.params.toolCall.title.split(/\s+/)[0]
+          : undefined);
       const patterns = readDb().allowedPatterns || [];
 
-      if (toolCommand && checkAllowedPattern(toolCommand, patterns)) {
-        logInfo("server", `[AUTO-APPROVE] Pattern matched: "${toolCommand}"`, threadId);
+      if (toolCommand && checkAllowedPattern(toolCommand, toolName, patterns)) {
+        logInfo("server", `[AUTO-APPROVE] Pattern matched: "${toolCommand}" (tool=${toolName ?? "unknown"})`, threadId);
 
         // Use the `agent` captured in this closure — it IS the live process.
         // Never call ClaudeAgent.getInstance() here; that may return a stale
@@ -259,8 +266,39 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
 
 app.get("/api/workspaces", (_req, res) => {
   const db = readDb();
-  db.workspaces.forEach((ws) => ensureWorkspace(ws.id, ws.name));
-  res.json(db.workspaces);
+  
+  // Validate all workspace paths and filter out invalid ones
+  const validWorkspaces = db.workspaces.filter((ws) => {
+    if (!fs.existsSync(ws.path)) {
+      logError("server", `Workspace path does not exist: ${ws.path}`, "global");
+      return false;
+    }
+    return true;
+  });
+
+  // If any were removed, update the DB
+  if (validWorkspaces.length !== db.workspaces.length) {
+    const removedIds = db.workspaces
+      .filter((ws) => !validWorkspaces.includes(ws))
+      .map((ws) => ws.id);
+    
+    updateDb((db) => {
+      db.workspaces = validWorkspaces;
+      // Also clean up threads and messages for removed workspaces
+      db.threads = db.threads.filter((t) => !removedIds.includes(t.workspaceId));
+      db.messages = db.messages.filter((m) => !removedIds.includes(m.threadId) && 
+        !db.threads.some((t) => removedIds.includes(t.workspaceId) && t.id === m.threadId));
+    });
+  }
+
+  // Ensure sandboxed workspaces exist
+  validWorkspaces.forEach((ws) => {
+    if (ws.path.includes("sandbox_workspaces")) {
+      ensureWorkspace(ws.id, ws.name);
+    }
+  });
+
+  res.json(validWorkspaces);
 });
 
 app.get("/api/allowedPatterns", (_req, res) => {
@@ -269,7 +307,7 @@ app.get("/api/allowedPatterns", (_req, res) => {
 });
 
 app.post("/api/allowedPatterns", (req, res) => {
-  const { pattern } = req.body;
+  const { pattern, toolName, variant } = req.body;
   if (!pattern || typeof pattern !== "string") {
     return res.status(400).json({ error: "pattern (string) required" });
   }
@@ -277,15 +315,16 @@ app.post("/api/allowedPatterns", (req, res) => {
   updateDb((db) => {
     db.allowedPatterns = db.allowedPatterns || [];
     const exists = (db.allowedPatterns as any[]).some(
-      (p: any) => (p.pattern || p) === pattern
+      (p: any) => (p.pattern || p) === pattern && p.toolName === (toolName ?? undefined)
     );
     if (!exists) {
       (db.allowedPatterns as any[]).push({
         pattern,
-        variant: pattern.endsWith("*") ? "wildcard" : "exact",
+        variant: variant ?? (pattern.endsWith("*") ? "wildcard" : "exact"),
+        toolName: toolName ?? undefined,
         createdAt: new Date().toISOString(),
       });
-      logInfo("server", `Pattern saved via API: ${pattern}`, "global");
+      logInfo("server", `Pattern saved via API (tool=${toolName ?? "any"}): ${pattern}`, "global");
     }
     patterns = db.allowedPatterns;
   });
@@ -310,10 +349,35 @@ app.post("/api/workspaces", (req, res) => {
   const { name, path: wsPath } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: "name required" });
 
+  // A path is REQUIRED and MUST point to an existing directory on this machine.
+  // We never silently fall back to a generated sandbox path — that hides
+  // mistakes (e.g. a macOS path on a Windows box) until the agent fails later.
+  if (!wsPath || !wsPath.trim()) {
+    return res.status(400).json({
+      error: "Workspace path is required",
+      details: "Provide an absolute path to an existing directory on this machine.",
+    });
+  }
+
+  if (!fs.existsSync(wsPath)) {
+    return res.status(400).json({
+      error: `Workspace path does not exist: ${wsPath}`,
+      details: "Provide an absolute path to an existing directory on this machine.",
+    });
+  }
+
+  // The path must be a directory, not a file.
+  if (!fs.statSync(wsPath).isDirectory()) {
+    return res.status(400).json({
+      error: `Workspace path is not a directory: ${wsPath}`,
+      details: "Provide an absolute path to an existing directory on this machine.",
+    });
+  }
+
   const id = `ws-${Date.now()}`;
-  const workspace: Workspace = { id, name, path: wsPath || `/projects/${name}` };
+  const workspace: Workspace = { id, name, path: wsPath };
+
   updateDb((db) => db.workspaces.push(workspace));
-  ensureWorkspace(id, name);
   res.status(201).json(workspace);
 });
 
@@ -432,7 +496,19 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
 
   // Look up the workspace to get its path
   const workspace = db.workspaces.find((ws) => ws.id === thread.workspaceId);
-  const wsPath = workspace?.path || thread.workspaceId;
+  if (!workspace) {
+    return res.status(404).json({ error: "workspace not found" });
+  }
+
+  const wsPath = workspace.path;
+
+  // Validate that the workspace path exists before proceeding
+  if (!fs.existsSync(wsPath)) {
+    return res.status(400).json({ 
+      error: `Workspace path no longer exists: ${wsPath}`,
+      details: "The workspace directory has been deleted or is no longer accessible. Please delete this workspace and create a new one."
+    });
+  }
 
   // Persist user message as raw ACP-style object
   const userMsg: Message = {
@@ -598,23 +674,31 @@ function generatePatternVariants(fullCommand: string): Array<{ variant: string; 
 // Helper: Check if a command matches any stored pattern
 // ---------------------------------------------------------------------------
 
-function checkAllowedPattern(command: string, patterns: any[]): boolean {
+function checkAllowedPattern(command: string, toolName: string | undefined, patterns: any[]): boolean {
   if (!patterns || patterns.length === 0) return false;
   if (!command || typeof command !== "string") return false;
 
+  // Normalise to forward slashes for consistent matching across platforms
+  const normCommand = command.replace(/\\/g, "/");
+
   for (const pattern of patterns) {
-    const pat = pattern.pattern || pattern; // Handle both old string format and new object format
+    const pat: string = (pattern.pattern || pattern);
+
+    // If the pattern has a toolName, it must match
+    if (pattern.toolName && toolName && pattern.toolName !== toolName) continue;
+
+    const normPat = pat.replace(/\\/g, "/");
 
     // Simple wildcard matching
-    if (pat === "*") return true;
+    if (normPat === "*") return true;
 
     // If pattern ends with *, use prefix matching
-    if (pat.endsWith("*")) {
-      const prefix = pat.slice(0, -1); // Remove the *
-      if (command.startsWith(prefix)) return true;
+    if (normPat.endsWith("*")) {
+      const prefix = normPat.slice(0, -1); // Remove the *
+      if (normCommand.startsWith(prefix)) return true;
     } else {
       // Exact match
-      if (command === pat) return true;
+      if (normCommand === normPat) return true;
     }
   }
 
@@ -627,7 +711,7 @@ function checkAllowedPattern(command: string, patterns: any[]): boolean {
 
 app.post("/api/threads/:threadId/respond", async (req, res) => {
   const { threadId } = req.params;
-  const { optionId, toolCommand } = req.body;
+  const { optionId, toolCommand, toolName } = req.body;
 
   if (!optionId || typeof optionId !== "string") {
     return res.status(400).json({ error: "optionId (string) required" });
@@ -649,15 +733,25 @@ app.post("/api/threads/:threadId/respond", async (req, res) => {
   }
 
   // If user selected "allow_always", save the exact tool command as a pattern
+  // scoped to the specific tool so Bash patterns don't auto-approve Write ops.
   if (optionId === "allow_always" && toolCommand) {
     updateDb((db) => {
       db.allowedPatterns = db.allowedPatterns || [];
       const exists = (db.allowedPatterns as any[]).some(
-        (p: any) => (p.pattern || p) === toolCommand
+        (p: any) => (p.pattern || p) === toolCommand && p.toolName === (toolName ?? undefined)
       );
       if (!exists) {
-        (db.allowedPatterns as any[]).push({ pattern: toolCommand, variant: "exact", createdAt: new Date().toISOString() });
-        logInfo("server", `Pattern saved (exact): ${toolCommand}`, threadId);
+        // Derive variant from toolName: Write/Edit/Read tools → their kind, Bash → "execute", etc.
+        const kind = toolName
+          ? (["Write", "Edit", "MultiEdit", "Read"].includes(toolName) ? toolName.toLowerCase() : "execute")
+          : "exact";
+        (db.allowedPatterns as any[]).push({
+          pattern: toolCommand,
+          variant: kind,
+          toolName: toolName ?? undefined,
+          createdAt: new Date().toISOString(),
+        });
+        logInfo("server", `Pattern saved (exact, tool=${toolName ?? "any"}): ${toolCommand}`, threadId);
       }
     });
   }
@@ -887,4 +981,9 @@ async function startServer() {
   app.listen(PORT, "0.0.0.0", () => console.log(`Server on http://localhost:${PORT}`));
 }
 
-startServer();
+// Don't auto-start the HTTP server (or boot Vite) when imported by tests.
+if (process.env.NODE_ENV !== "test") {
+  startServer();
+}
+
+export { app };

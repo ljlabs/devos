@@ -16,6 +16,8 @@ interface WorkspaceModalProps {
   path: string;
   setPath: (v: string) => void;
   onSubmit: (e: React.FormEvent) => void;
+  error?: string;
+  setError?: (v: string) => void;
 }
 
 export function WorkspaceModal({
@@ -26,12 +28,13 @@ export function WorkspaceModal({
   setName,
   path,
   setPath,
-  onSubmit
+  onSubmit,
+  error = "",
+  setError = () => {}
 }: WorkspaceModalProps) {
   if (!isOpen) return null;
 
   const isEditing = !!editingWorkspace;
-  const displayPath = path || (name.trim() ? `/projects/${name.trim()}` : "/projects/...");
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
@@ -57,6 +60,12 @@ export function WorkspaceModal({
               : "Specify a workspace directory. DevOS will map code trees in this folder to isolated threads."}
           </p>
 
+          {error && (
+            <div className="bg-rose-500/10 border border-rose-500/30 rounded-lg px-3 py-2.5">
+              <p className="text-xs text-rose-300 font-sans">{error}</p>
+            </div>
+          )}
+
           <div className="space-y-3 pt-2">
             <div>
               <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-widest mb-1.5">
@@ -66,7 +75,10 @@ export function WorkspaceModal({
                 type="text"
                 required
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  if (error) setError("");
+                }}
                 placeholder="e.g. backend-services, task-dashboard"
                 className="w-full bg-[#18181B] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-colors"
               />
@@ -78,10 +90,16 @@ export function WorkspaceModal({
               </label>
               <input
                 type="text"
-                value={isEditing ? path : displayPath}
+                required
+                value={path}
                 disabled={isEditing}
-                onChange={(e) => !isEditing && setPath(e.target.value)}
-                placeholder="/Users/developer/projects/..."
+                onChange={(e) => {
+                  if (!isEditing) {
+                    setPath(e.target.value);
+                    if (error) setError("");
+                  }
+                }}
+                placeholder="C:/Users/you/projects/my-app"
                 className={`w-full bg-[#18181B] rounded-lg px-3 py-2 text-sm font-mono transition-colors ${
                   isEditing
                     ? "border border-white/5 text-slate-500 cursor-not-allowed"

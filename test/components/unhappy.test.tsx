@@ -44,7 +44,7 @@ describe("ThreadList — Unhappy Path", () => {
       ];
       render(<ThreadList {...baseProps} threads={threads} />);
       const item = screen.getByText("Thread One").closest("div.group")!;
-      const deleteBtn = within(item).getByTitle("Delete thread");
+      const deleteBtn = within(item as HTMLElement).getByTitle("Delete thread");
       await user.click(deleteBtn);
 
       expect(baseProps.onDeleteThread).not.toHaveBeenCalled();
@@ -57,7 +57,7 @@ describe("ThreadList — Unhappy Path", () => {
       ];
       render(<ThreadList {...baseProps} threads={threads} />);
       const item = screen.getByText("My Special Thread").closest("div.group")!;
-      const deleteBtn = within(item).getByTitle("Delete thread");
+      const deleteBtn = within(item as HTMLElement).getByTitle("Delete thread");
       await user.click(deleteBtn);
 
       expect(window.confirm).toHaveBeenCalledWith('Delete "My Special Thread"?');
@@ -72,7 +72,7 @@ describe("ThreadList — Unhappy Path", () => {
       ];
       render(<ThreadList {...baseProps} threads={threads} />);
       const item = screen.getByText("Original").closest("div.group")!;
-      const renameBtn = within(item).getByTitle("Rename thread");
+      const renameBtn = within(item as HTMLElement).getByTitle("Rename thread");
       await user.click(renameBtn);
 
       const input = item.querySelector("input")!;
@@ -90,7 +90,7 @@ describe("ThreadList — Unhappy Path", () => {
       ];
       render(<ThreadList {...baseProps} threads={threads} />);
       const item = screen.getByText("Original").closest("div.group")!;
-      const renameBtn = within(item).getByTitle("Rename thread");
+      const renameBtn = within(item as HTMLElement).getByTitle("Rename thread");
       await user.click(renameBtn);
 
       const input = item.querySelector("input")!;
@@ -109,7 +109,7 @@ describe("ThreadList — Unhappy Path", () => {
       ];
       render(<ThreadList {...baseProps} threads={threads} />);
       const item = screen.getByText("Original").closest("div.group")!;
-      const renameBtn = within(item).getByTitle("Rename thread");
+      const renameBtn = within(item as HTMLElement).getByTitle("Rename thread");
       await user.click(renameBtn);
 
       const input = item.querySelector("input")!;
@@ -185,13 +185,13 @@ describe("WorkspaceModal — Unhappy Path", () => {
           path="/immutable/path"
         />
       );
-      const pathInput = screen.getByPlaceholderText("/Users/developer/projects/...");
+      const pathInput = screen.getByPlaceholderText("C:/Users/you/projects/my-app");
       expect(pathInput).toBeDisabled();
     });
 
     it("path input is editable when creating new workspace", () => {
       render(<WorkspaceModal {...defaultProps} path="/Users/dev/test" />);
-      const pathInput = screen.getByPlaceholderText("/Users/developer/projects/...");
+      const pathInput = screen.getByPlaceholderText("C:/Users/you/projects/my-app");
       expect(pathInput).not.toBeDisabled();
     });
   });
@@ -246,7 +246,7 @@ describe("WorkspaceSidebar — Unhappy Path", () => {
       ];
       render(<WorkspaceSidebar {...baseProps} workspaces={workspaces} />);
       const item = screen.getByText("My Workspace").closest("div.group")!;
-      const deleteBtn = within(item).getByTitle("Delete workspace");
+      const deleteBtn = within(item as HTMLElement).getByTitle("Delete workspace");
       await user.click(deleteBtn);
 
       expect(baseProps.onDeleteWorkspace).not.toHaveBeenCalled();
@@ -259,7 +259,7 @@ describe("WorkspaceSidebar — Unhappy Path", () => {
       ];
       render(<WorkspaceSidebar {...baseProps} workspaces={workspaces} />);
       const item = screen.getByText("Prod Environment").closest("div.group")!;
-      const deleteBtn = within(item).getByTitle("Delete workspace");
+      const deleteBtn = within(item as HTMLElement).getByTitle("Delete workspace");
       await user.click(deleteBtn);
 
       expect(window.confirm).toHaveBeenCalledWith(

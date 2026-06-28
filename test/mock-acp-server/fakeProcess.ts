@@ -96,7 +96,7 @@ export function buildMockScenario() {
   function handleNextRequest(
     response: any = {},
     notifications: any[] = []
-  ): string {
+  ): Promise<string> {
     // Wait a tick for the message to arrive
     return new Promise<string>((resolve) => {
       setTimeout(() => {

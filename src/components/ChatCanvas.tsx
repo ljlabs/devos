@@ -67,11 +67,12 @@ interface ChatCanvasProps {
   onChangeInput: (text: string) => void;
   onSendMessage: () => void;
   onCancelAgent: () => void;
-  onPermissionResponse: (optionId: string, toolCommand?: string) => void;
+  onPermissionResponse: (optionId: string, toolCommand?: string, toolName?: string) => void;
   onDeploy: () => void;
   isDeploying: boolean;
   threadLogs: any[];
   onClearThreadLogs: () => void;
+  workspacePath?: string;
 }
 
 /**
@@ -227,30 +228,44 @@ function PermissionBubble({
   options,
   onRespond,
   timestamp,
+  workspacePath,
 }: {
   toolCall: any;
   options: Array<{ optionId: string; name: string; kind: string }>;
-  onRespond: (optionId: string, toolCommand?: string) => void;
+  onRespond: (optionId: string, toolCommand?: string, toolName?: string) => void;
   timestamp: string;
+  workspacePath?: string;
 }) {
   const [showPatternPicker, setShowPatternPicker] = useState(false);
   const [selectedPattern, setSelectedPattern] = useState<string | null>(null);
 
-  const command: string = toolCall?.rawInput?.command ?? "";
-  const patternVariants = derivePatternVariants(command);
+  const command: string =
+    toolCall?.rawInput?.command ??
+    toolCall?.rawInput?.file_path ??
+    toolCall?.rawInput?.path ??
+    "";
+  const toolName: string | undefined =
+    toolCall?._meta?.claudeCode?.toolName ??
+    (typeof toolCall?.title === "string" ? toolCall.title.split(/\s+/)[0] : undefined);
+  const patternVariants = derivePatternVariants(command, toolCall?.kind, workspacePath);
 
   function handleStandardOption(optionId: string) {
-    // For allow_always we also pass the command so the server saves the exact pattern
-    onRespond(optionId, optionId === "allow_always" ? command : undefined);
+    // For allow_always we also pass the command and toolName so the server
+    // scopes the pattern to this specific tool (Bash patterns won't match Write, etc.)
+    onRespond(optionId, optionId === "allow_always" ? command : undefined, toolName);
   }
 
   function handleConfirmSimilar() {
     if (!selectedPattern) return;
-    // Save the chosen pattern to db.json for future auto-approval
+    // Save the chosen pattern scoped to this tool
     fetch("/api/allowedPatterns", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pattern: selectedPattern }),
+      body: JSON.stringify({
+        pattern: selectedPattern,
+        toolName,
+        variant: toolCall?.kind ?? "wildcard",
+      }),
     }).catch(console.error);
     // Use the allow-once optionId from ACP's actual options list — never hardcode
     const allowOnceOption = options.find((o) => o.kind === "allow_once");
@@ -331,7 +346,9 @@ function PermissionBubble({
                       onChange={() => setSelectedPattern(v.pattern)}
                       className="mt-0.5 accent-cyan-400 shrink-0"
                     />
-                    <span className="text-xs font-mono text-slate-300 break-all">{v.label}</span>
+                    <span className="text-xs font-mono text-slate-300 break-all">
+                      {toolName ? <span className="text-cyan-400">{toolName}: </span> : null}{v.label}
+                    </span>
                   </label>
                 ))}
               </div>
@@ -370,6 +387,7 @@ export default function ChatCanvas({
   isDeploying,
   threadLogs,
   onClearThreadLogs,
+  workspacePath,
 }: ChatCanvasProps) {
   const [expandedToolId, setExpandedToolId] = useState<string | null>(null);
   const [showConsole, setShowConsole] = useState(false);
@@ -773,6 +791,7 @@ export default function ChatCanvas({
                   options={options}
                   onRespond={onPermissionResponse}
                   timestamp={msg.timestamp}
+                  workspacePath={workspacePath}
                 />
               );
             }

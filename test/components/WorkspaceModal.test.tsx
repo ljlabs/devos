@@ -57,7 +57,7 @@ describe("WorkspaceModal", () => {
 
   it("path input is enabled when creating new workspace", () => {
     render(<WorkspaceModal {...defaultProps} />);
-    const pathInput = screen.getByPlaceholderText("/Users/developer/projects/...");
+    const pathInput = screen.getByPlaceholderText("C:/Users/you/projects/my-app");
     expect(pathInput).not.toBeDisabled();
   });
 
@@ -68,7 +68,7 @@ describe("WorkspaceModal", () => {
         editingWorkspace={{ id: "ws-1", name: "my-ws", path: "/ws" }}
       />
     );
-    const pathInput = screen.getByPlaceholderText("/Users/developer/projects/...");
+    const pathInput = screen.getByPlaceholderText("C:/Users/you/projects/my-app");
     expect(pathInput).toBeDisabled();
   });
 
