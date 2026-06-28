@@ -584,17 +584,18 @@ export default function ChatCanvas({
               const { title, kind, rawInput, toolCallId, status } = parsed.content;
               const currentMsgIdx = messages.indexOf(msg);
               
-              // Look ahead for matching tool result that has rawOutput
+              // Look ahead for matching tool result that has rawOutput (completed OR failed)
               const resultMsg = messages.slice(currentMsgIdx + 1).find(
                 (m) => {
                   const update = m.raw?.params?.update;
                   return (
                     update?.toolCallId === toolCallId &&
                     update?.sessionUpdate === "tool_call_update" &&
-                    update?.status === "completed"
+                    (update?.status === "completed" || update?.status === "failed")
                   );
                 }
               );
+              const resultStatus = resultMsg?.raw?.params?.update?.status;
               
               // Look ahead for permission response that answers this tool
               const permissionMsg = messages.find(
@@ -607,42 +608,62 @@ export default function ChatCanvas({
               const hasResult = !!resultMsg;
               const isExpanded = expandedToolId === toolCallId;
 
+              const isFailed = resultStatus === "failed";
+              const isCompleted = resultStatus === "completed";
+
               return (
                 <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text">
                   <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(100,116,139,0.15)] select-none border ${
-                    hasApproval
-                      ? permissionApproved
-                        ? "bg-emerald-500/20 border-emerald-500/40"
-                        : "bg-red-500/20 border-red-500/40"
-                      : "bg-slate-500/20 border-slate-500/40"
+                    isFailed
+                      ? "bg-red-500/20 border-red-500/40"
+                      : hasApproval
+                        ? permissionApproved
+                          ? "bg-emerald-500/20 border-emerald-500/40"
+                          : "bg-red-500/20 border-red-500/40"
+                        : "bg-slate-500/20 border-slate-500/40"
                   }`}>
-                    {hasApproval ? (
+                    {isFailed ? (
+                      <XCircle size={16} className="text-red-400" />
+                    ) : hasApproval ? (
                       permissionApproved ? (
                         <CheckCircle2 size={16} className="text-emerald-400" />
                       ) : (
                         <XCircle size={16} className="text-red-400" />
                       )
-                    ) : hasResult ? (
+                    ) : isCompleted ? (
                       <Terminal size={16} className="text-emerald-400" />
                     ) : (
                       <Zap size={16} className="text-slate-400 animate-pulse" />
                     )}
                   </div>
                   <div className="flex-1 max-w-[90%]">
-                    <div className="border border-slate-500/20 rounded-lg overflow-hidden bg-black/40">
+                    <div className={`border rounded-lg overflow-hidden bg-black/40 ${
+                      isFailed ? "border-red-500/30" : "border-slate-500/20"
+                    }`}>
                       {/* Tool header / toggle button */}
                       <button
-                        onClick={() => setExpandedToolId(isExpanded ? null : toolCallId)}
-                        className={`w-full flex items-center justify-between px-4 py-2 bg-[#0E0E11] border-b border-slate-500/10 hover:bg-slate-900/20 transition-colors select-none text-left ${
-                          hasResult ? "cursor-pointer" : ""
+                        onClick={() => hasResult ? setExpandedToolId(isExpanded ? null : toolCallId) : undefined}
+                        className={`w-full flex items-center justify-between px-4 py-2 border-b transition-colors select-none text-left ${
+                          isFailed
+                            ? "bg-red-950/40 border-red-500/20 hover:bg-red-950/60 cursor-pointer"
+                            : hasResult
+                              ? "bg-[#0E0E11] border-slate-500/10 hover:bg-slate-900/20 cursor-pointer"
+                              : "bg-[#0E0E11] border-slate-500/10"
                         }`}
                         disabled={!hasResult}
                       >
                         <div className="flex items-center gap-2 flex-1">
-                          <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                          <span className={`text-[10px] font-mono font-bold uppercase tracking-wider ${
+                            isFailed ? "text-red-400" : "text-slate-400"
+                          }`}>
                             {kind?.toUpperCase() || "TOOL"}: {title || "pending…"}
                           </span>
-                          {hasApproval && (
+                          {isFailed && (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30">
+                              ✗ Failed
+                            </span>
+                          )}
+                          {!isFailed && hasApproval && (
                             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
                               permissionApproved
                                 ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
@@ -658,7 +679,7 @@ export default function ChatCanvas({
                           )}
                         </div>
                         {hasResult && (
-                          <div className="text-slate-500 text-xs ml-2">
+                          <div className={`text-xs ml-2 ${isFailed ? "text-red-400/70" : "text-slate-500"}`}>
                             {isExpanded ? "▼ Hide output" : "▶ Show output"}
                           </div>
                         )}
@@ -666,8 +687,12 @@ export default function ChatCanvas({
 
                       {/* Tool output (collapsible, shown if expanded and result exists) */}
                       {hasResult && isExpanded && resultMsg && (
-                        <div className="p-3 bg-black/95 max-h-60 overflow-y-auto custom-scrollbar">
-                          <pre className="font-mono text-xs text-slate-300 whitespace-pre-wrap break-words">
+                        <div className={`p-3 max-h-60 overflow-y-auto custom-scrollbar ${
+                          isFailed ? "bg-red-950/20" : "bg-black/95"
+                        }`}>
+                          <pre className={`font-mono text-xs whitespace-pre-wrap break-words ${
+                            isFailed ? "text-red-300" : "text-slate-300"
+                          }`}>
                             {typeof resultMsg.raw?.params?.update?.rawOutput === 'string' 
                               ? resultMsg.raw.params.update.rawOutput 
                               : JSON.stringify(resultMsg.raw?.params?.update?.rawOutput, null, 2)}
