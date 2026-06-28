@@ -10,7 +10,7 @@ import {
 import WorkspaceSidebar from "./components/WorkspaceSidebar";
 import ThreadList from "./components/ThreadList";
 import ChatCanvas from "./components/ChatCanvas";
-import { WorkspaceModal } from "./components/Dialogs";
+import { WorkspaceModal, SettingsModal } from "./components/Dialogs";
 import { Workspace, Thread, Message } from "./types";
 
 export default function App() {
@@ -35,6 +35,8 @@ export default function App() {
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
   const [workspaceName, setWorkspaceName] = useState("");
   const [workspacePath, setWorkspacePath] = useState("");
+
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
 
@@ -426,6 +428,7 @@ export default function App() {
         onSelectView={setActiveView}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+        onOpenSettings={() => setShowSettingsModal(true)}
       />
 
       {/* RENDER CONTENT PANELS ACCORDING TO NAVIGATION STATE */}
@@ -501,6 +504,11 @@ export default function App() {
         path={workspacePath}
         setPath={setWorkspacePath}
         onSubmit={handleWorkspaceSubmit}
+      />
+
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
       />
     </div>
   );

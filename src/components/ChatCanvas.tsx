@@ -248,11 +248,10 @@ function derivePatternVariants(command: string): Array<{ label: string; pattern:
   // If there's a second part that looks like a script path, offer script-level wildcard
   if (parts.length >= 2) {
     const script = parts[1];
-    const scriptName = script.split(/[\\/]/).pop() ?? script;
     const scriptPattern = `${exe} ${script} *`;
     if (scriptPattern !== command) {
       variants.push({
-        label: `${exeName} ${scriptName} * (any args to this script)`,
+        label: `${exe} ${script} * (any args to this script)`,
         pattern: scriptPattern,
       });
     }
@@ -263,7 +262,7 @@ function derivePatternVariants(command: string): Array<{ label: string; pattern:
     const exePattern = `${exe} *`;
     if (exePattern !== command && !variants.some(v => v.pattern === exePattern)) {
       variants.push({
-        label: `${exeName} * (any command via ${exeName})`,
+        label: `${exe} * (any command via ${exeName})`,
         pattern: exePattern,
       });
     }

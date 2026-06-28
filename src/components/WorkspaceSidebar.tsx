@@ -29,6 +29,7 @@ interface WorkspaceSidebarProps {
   onSelectView: (view: 'threads' | 'activity') => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  onOpenSettings: () => void;
 }
 
 export default function WorkspaceSidebar({
@@ -41,7 +42,8 @@ export default function WorkspaceSidebar({
   activeView,
   onSelectView,
   collapsed,
-  onToggleCollapse
+  onToggleCollapse,
+  onOpenSettings
 }: WorkspaceSidebarProps) {
   return (
     <aside 
@@ -182,7 +184,7 @@ export default function WorkspaceSidebar({
                 <HelpCircle size={16} />
               </a>
             </div>
-            <button className="hover:text-white cursor-pointer" title="Settings">
+            <button className="hover:text-white cursor-pointer" title="Settings" onClick={onOpenSettings}>
               <Settings size={16} />
             </button>
           </div>
