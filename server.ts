@@ -58,8 +58,14 @@ function readDb(): DatabaseSchema {
   }
 }
 
-function writeDb(data: DatabaseSchema): void {
-  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+function writeDb(data: DatabaseSchema): boolean {
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+    return true;
+  } catch (err: any) {
+    console.error("[db] writeDb failed:", err.message);
+    return false;
+  }
 }
 
 function updateDb(fn: (db: DatabaseSchema) => void): void {
@@ -211,7 +217,7 @@ app.get("/api/workspaces", (_req, res) => {
 
 app.post("/api/workspaces", (req, res) => {
   const { name, path: wsPath } = req.body;
-  if (!name) return res.status(400).json({ error: "name required" });
+  if (!name || !name.trim()) return res.status(400).json({ error: "name required" });
 
   const id = `ws-${Date.now()}`;
   const workspace: Workspace = { id, name, path: wsPath || `/projects/${name}` };
@@ -327,7 +333,7 @@ app.get("/api/threads/:threadId/messages", (req, res) => {
 app.post("/api/threads/:threadId/messages", async (req, res) => {
   const { threadId } = req.params;
   const { text } = req.body;
-  if (!text) return res.status(400).json({ error: "text required" });
+  if (!text || !text.trim()) return res.status(400).json({ error: "text required" });
 
   const db = readDb();
   const thread = db.threads.find((t) => t.id === threadId);
@@ -505,6 +511,9 @@ app.post("/api/threads/:threadId/respond", async (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.post("/api/threads/:threadId/acp", async (req, res) => {
+  if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+    return res.status(400).json({ error: "valid JSON-RPC object required" });
+  }
   const { threadId } = req.params;
   const db = readDb();
   const thread = db.threads.find((t) => t.id === threadId);

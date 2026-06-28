@@ -61,12 +61,17 @@ export class ClaudeAgent extends EventEmitter {
   // session history as session/update notifications during the load — suppress
   // them so they don't get re-persisted into the DB as duplicate messages.
   private suppressEmit = false;
+  private rpcTimeoutMs = 30_000;
 
   constructor(
     private readonly threadId: string,
     private readonly workspacePath: string
   ) {
     super();
+  }
+
+  setRpcTimeout(ms: number): void {
+    this.rpcTimeoutMs = ms;
   }
 
   // ---------------------------------------------------------------------------
@@ -151,7 +156,15 @@ export class ClaudeAgent extends EventEmitter {
     }
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
-      this.pendingRpc.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pendingRpc.delete(id);
+        reject(new Error(`RPC "${method}" timed out after ${this.rpcTimeoutMs}ms`));
+      }, this.rpcTimeoutMs);
+
+      this.pendingRpc.set(id, {
+        resolve: (v) => { clearTimeout(timer); resolve(v); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
       this.proc!.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
       logInfo("acp", `RPC sent: id=${id} method=${method}`, this.threadId);
     });
@@ -209,6 +222,7 @@ export class ClaudeAgent extends EventEmitter {
 
     this.proc.on("error", (err) => {
       logError("acp", `SPAWN ERROR: ${err.message}`, this.threadId);
+      this.rejectAllPending(err);
       this.proc = null;
       this.initialized = false;
       this.emit("close");
@@ -255,9 +269,17 @@ export class ClaudeAgent extends EventEmitter {
 
     this.proc.on("close", (code) => {
       logInfo("acp", `PROCESS CLOSED: code=${code}`, this.threadId);
+      this.rejectAllPending(new Error("ACP process exited"));
       this.proc = null;
       this.initialized = false;
       this.emit("close");
     });
+  }
+
+  private rejectAllPending(err: Error): void {
+    for (const [id, pending] of this.pendingRpc) {
+      pending.reject(err);
+    }
+    this.pendingRpc.clear();
   }
 }
