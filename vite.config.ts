@@ -29,7 +29,10 @@ export default defineConfig(() => {
             normalized.endsWith('/logs.db-wal') ||
             normalized.endsWith('/logs.db-shm') ||
             normalized.includes('/sandbox_workspaces/') ||
-            normalized.includes('/.claude/')
+            normalized.includes('/.claude/') ||
+            normalized.endsWith('.test.ts') ||
+            normalized.endsWith('.spec.ts') ||
+            normalized.includes('/test/')
           );
         },
       },

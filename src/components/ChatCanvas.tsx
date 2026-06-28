@@ -14,6 +14,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { derivePatternVariants } from "../utils/patterns";
 import {
   Terminal,
   Bot,
@@ -66,7 +67,7 @@ interface ChatCanvasProps {
   onChangeInput: (text: string) => void;
   onSendMessage: () => void;
   onCancelAgent: () => void;
-  onPermissionResponse: (optionId: string) => void;
+  onPermissionResponse: (optionId: string, toolCommand?: string) => void;
   onDeploy: () => void;
   isDeploying: boolean;
   threadLogs: any[];
@@ -217,6 +218,146 @@ function getMessageContent(msg: Message): { type: string; content: any } | null 
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// PermissionBubble — inline pattern picker for "Allow Similar"
+// ---------------------------------------------------------------------------
+
+function PermissionBubble({
+  toolCall,
+  options,
+  onRespond,
+  timestamp,
+}: {
+  toolCall: any;
+  options: Array<{ optionId: string; name: string; kind: string }>;
+  onRespond: (optionId: string, toolCommand?: string) => void;
+  timestamp: string;
+}) {
+  const [showPatternPicker, setShowPatternPicker] = useState(false);
+  const [selectedPattern, setSelectedPattern] = useState<string | null>(null);
+
+  const command: string = toolCall?.rawInput?.command ?? "";
+  const patternVariants = derivePatternVariants(command);
+
+  function handleStandardOption(optionId: string) {
+    // For allow_always we also pass the command so the server saves the exact pattern
+    onRespond(optionId, optionId === "allow_always" ? command : undefined);
+  }
+
+  function handleConfirmSimilar() {
+    if (!selectedPattern) return;
+    // Save the chosen pattern to db.json for future auto-approval
+    fetch("/api/allowedPatterns", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pattern: selectedPattern }),
+    }).catch(console.error);
+    // Use the allow-once optionId from ACP's actual options list — never hardcode
+    const allowOnceOption = options.find((o) => o.kind === "allow_once");
+    onRespond(allowOnceOption?.optionId ?? "allow");
+    setShowPatternPicker(false);
+  }
+
+  return (
+    <div className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn">
+      <div className="w-8 h-8 bg-amber-500/20 border border-amber-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(245,158,11,0.15)] select-none">
+        <ShieldAlert size={16} className="text-amber-400 animate-pulse" />
+      </div>
+      <div className="flex-1 max-w-[90%]">
+        <div className="border border-amber-500/30 rounded-xl overflow-hidden bg-amber-500/5">
+          {/* Header */}
+          <div className="px-4 py-3 bg-amber-500/10 border-b border-amber-500/20 select-none">
+            <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-400">Permission Required</p>
+            <p className="text-sm text-amber-200 mt-1 font-medium break-all">{toolCall?.title}</p>
+            {toolCall?.kind && (
+              <p className="text-[10px] text-amber-400/60 mt-0.5 font-mono">kind: {toolCall.kind}</p>
+            )}
+          </div>
+
+          {/* Standard ACP options + Allow Similar button */}
+          {!showPatternPicker && (
+            <div className="px-4 py-3 flex flex-wrap gap-2">
+              {(options ?? []).map((opt) => {
+                let btnClass = "px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer active:scale-95 ";
+                if (opt.kind === "allow_always") {
+                  btnClass += "bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30";
+                } else if (opt.kind === "allow_once") {
+                  btnClass += "bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30";
+                } else {
+                  btnClass += "bg-transparent border-white/20 text-slate-300 hover:bg-white/5";
+                }
+                return (
+                  <button key={opt.optionId} className={btnClass} onClick={() => handleStandardOption(opt.optionId)}>
+                    {opt.name}
+                  </button>
+                );
+              })}
+              {/* Only show "Allow Similar" when there are non-exact variants available */}
+              {patternVariants.length > 1 && (
+                <button
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer active:scale-95 bg-cyan-500/20 border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/30"
+                  onClick={() => {
+                    setSelectedPattern(patternVariants[1]?.pattern ?? null);
+                    setShowPatternPicker(true);
+                  }}
+                >
+                  Allow Similar…
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Inline pattern picker — shown when user clicks "Allow Similar…" */}
+          {showPatternPicker && (
+            <div className="px-4 py-3 space-y-3">
+              <p className="text-[11px] text-cyan-300 font-mono font-semibold uppercase tracking-wider">
+                Choose which commands to allow automatically:
+              </p>
+              <div className="space-y-1.5">
+                {patternVariants.map((v) => (
+                  <label
+                    key={v.pattern}
+                    className={`flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                      selectedPattern === v.pattern
+                        ? "border-cyan-500/50 bg-cyan-500/10"
+                        : "border-white/10 bg-white/5 hover:border-white/20"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="pattern"
+                      value={v.pattern}
+                      checked={selectedPattern === v.pattern}
+                      onChange={() => setSelectedPattern(v.pattern)}
+                      className="mt-0.5 accent-cyan-400 shrink-0"
+                    />
+                    <span className="text-xs font-mono text-slate-300 break-all">{v.label}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  disabled={!selectedPattern}
+                  onClick={handleConfirmSimilar}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer active:scale-95 bg-cyan-500/20 border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Confirm &amp; Allow
+                </button>
+                <button
+                  onClick={() => setShowPatternPicker(false)}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  Back
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ChatCanvas({
   activeThread,
   messages,
@@ -236,11 +377,23 @@ export default function ChatCanvas({
   const isAgentBusy = activeThread?.status !== 'idle';
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-scroll to bottom of conversation
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Auto-expand textarea as user types, cap at 10 lines (240px), then scroll
+  const handleTextareaChange = (text: string) => {
+    onChangeInput(text);
+    
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      const newHeight = Math.min(textareaRef.current.scrollHeight, 240);
+      textareaRef.current.style.height = newHeight + "px";
+    }
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -366,7 +519,7 @@ export default function ChatCanvas({
               return (
                 <div key={msg.id} className="flex justify-end max-w-4xl mx-auto w-full group animate-fadeIn select-text">
                   <div className="max-w-[80%] bg-[#18181B] border border-white/5 p-4 rounded-2xl rounded-tr-none">
-                    <p className="text-sm leading-relaxed text-slate-200">
+                    <p className="text-sm leading-relaxed text-slate-200 whitespace-pre-wrap break-words">
                       {parsed.content}
                     </p>
                     <div className="text-[10px] text-slate-500 font-mono mt-2 text-right select-none">
@@ -589,43 +742,13 @@ export default function ChatCanvas({
               if (alreadyAnswered) return null;
 
               return (
-                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn">
-                  <div className="w-8 h-8 bg-amber-500/20 border border-amber-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(245,158,11,0.15)] select-none">
-                    <ShieldAlert size={16} className="text-amber-400 animate-pulse" />
-                  </div>
-                  <div className="flex-1 max-w-[90%]">
-                    <div className="border border-amber-500/30 rounded-xl overflow-hidden bg-amber-500/5">
-                      <div className="px-4 py-3 bg-amber-500/10 border-b border-amber-500/20 select-none">
-                        <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-400">Permission Required</p>
-                        <p className="text-sm text-amber-200 mt-1 font-medium">{toolCall?.title}</p>
-                        {toolCall?.kind && (
-                          <p className="text-[10px] text-amber-400/60 mt-0.5 font-mono">kind: {toolCall.kind}</p>
-                        )}
-                      </div>
-                      <div className="px-4 py-3 flex flex-wrap gap-2">
-                        {(options ?? []).map((opt: { optionId: string; name: string; kind: string }) => {
-                          let btnClass = "px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer active:scale-95 ";
-                          if (opt.kind === "allow_always") {
-                            btnClass += "bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30";
-                          } else if (opt.kind === "allow_once") {
-                            btnClass += "bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30";
-                          } else {
-                            btnClass += "bg-transparent border-white/20 text-slate-300 hover:bg-white/5";
-                          }
-                          return (
-                            <button
-                              key={opt.optionId}
-                              className={btnClass}
-                              onClick={() => onPermissionResponse(opt.optionId)}
-                            >
-                              {opt.name}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <PermissionBubble
+                  key={msg.id}
+                  toolCall={toolCall}
+                  options={options}
+                  onRespond={onPermissionResponse}
+                  timestamp={msg.timestamp}
+                />
               );
             }
 
@@ -802,14 +925,15 @@ export default function ChatCanvas({
             </button>
             
             <textarea
+              ref={textareaRef}
               value={inputText}
-              onChange={(e) => onChangeInput(e.target.value)}
+              onChange={(e) => handleTextareaChange(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={isAgentBusy}
-              className="flex-1 bg-transparent border-none focus:outline-none focus:ring-0 text-sm font-sans text-slate-200 placeholder-slate-600 resize-none py-1.5 h-10 max-h-40 overflow-y-auto custom-scrollbar disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex-1 bg-transparent border-none focus:outline-none focus:ring-0 text-sm font-sans text-slate-200 placeholder-slate-600 resize-none py-1.5 max-h-60 overflow-y-auto custom-scrollbar disabled:opacity-40 disabled:cursor-not-allowed"
               placeholder={isAgentBusy ? "Agent is busy..." : "Type a command or ask Claude to do something..."}
               rows={1}
-              style={{ caretColor: "#10b981" }}
+              style={{ caretColor: "#10b981", height: "auto", minHeight: "40px" }}
             />
 
             {isAgentBusy ? (

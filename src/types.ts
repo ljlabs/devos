@@ -51,8 +51,27 @@ export interface Message {
   type?: ACPMessageMethod | 'response' | 'unknown';
 }
 
+/**
+ * Workspace-scoped permission patterns for "allow similar" behavior.
+ * Variants allow fine-grained control over what "similar" means.
+ * 
+ * Example for Python web-search tool:
+ * - "exact": Full command (specific search terms) - rarely reused
+ * - "tool": "python.exe main.py *" - any args to the tool
+ * - "category": "python.exe *" - any python tool in that directory
+ */
+export interface AllowSimilarPattern {
+  variant: "exact" | "tool" | "category" | "workspace"; // Which parts to match
+  pattern: string;  // The actual pattern (with * for wildcards)
+  toolName?: string; // Optional: specific tool this applies to
+  createdAt: string;
+}
+
 export interface DatabaseSchema {
   workspaces: Workspace[];
   threads: Thread[];
   messages: Message[];
+  
+  // New: Per-workspace "allow similar" patterns with variants
+  allowedPatterns?: AllowSimilarPattern[]; 
 }

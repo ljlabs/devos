@@ -211,6 +211,7 @@ describe("WorkspaceSidebar — Unhappy Path", () => {
     onSelectView: vi.fn(),
     collapsed: false,
     onToggleCollapse: vi.fn(),
+    onOpenSettings: vi.fn(),
   };
 
   beforeEach(() => {
