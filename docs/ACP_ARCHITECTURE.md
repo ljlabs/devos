@@ -220,7 +220,7 @@ When ACP requests permission:
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "result": {"selected": {"optionId": "allow"}}
+  "result": {"outcome": {"outcome": "selected", "optionId": "allow"}}
 }
 ```
 

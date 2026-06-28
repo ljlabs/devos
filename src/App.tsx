@@ -350,13 +350,13 @@ export default function App() {
   };
 
   // Handle permission response from ACP permission request
-  const handlePermissionResponse = async (optionId: string) => {
+  const handlePermissionResponse = async (optionId: string, toolCommand?: string) => {
     if (!activeThreadId) return;
     try {
       const res = await fetch(`/api/threads/${activeThreadId}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ optionId })
+        body: JSON.stringify({ optionId, toolCommand })
       });
       if (res.ok) {
         setGlobalLogs(prev => [

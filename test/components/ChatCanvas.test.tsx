@@ -328,7 +328,7 @@ describe("ChatCanvas", () => {
       );
       const btn = screen.getByText("Allow");
       await user.click(btn);
-      expect(mockOnPermissionResponse).toHaveBeenCalledWith("allow_once");
+      expect(mockOnPermissionResponse).toHaveBeenCalledWith("allow_once", undefined);
     });
 
     it("should hide permission bubble after response", () => {

@@ -44,6 +44,7 @@ const defaultDb: DatabaseSchema = {
   ],
   threads: [],
   messages: [],
+  allowedPatterns: [],
 };
 
 function readDb(): DatabaseSchema {
@@ -52,7 +53,12 @@ function readDb(): DatabaseSchema {
       fs.writeFileSync(DB_FILE, JSON.stringify(defaultDb, null, 2));
       return defaultDb;
     }
-    return JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+    const data = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+    // Ensure allowedPatterns exists (for backward compatibility)
+    if (!data.allowedPatterns) {
+      data.allowedPatterns = [];
+    }
+    return data;
   } catch {
     return defaultDb;
   }
@@ -129,6 +135,48 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
     logInfo("server", `ACP message received: ${raw.method ?? "response"}`, threadId);
     broadcastGlobalLog({ type: "acp", threadId, raw, timestamp: new Date().toISOString() });
 
+    // -----------------------------------------------------------------------
+    // Auto-approve check BEFORE storing the message in DB.
+    //
+    // Why before? If we store first then send allow, the UI polls and renders
+    // a permission bubble for a split-second before the next poll removes it.
+    // By handling it here we never write a session/request_permission message
+    // to DB — so the UI never sees a prompt at all. Instead we write a small
+    // "auto_approved" record so the chat log shows what happened.
+    // -----------------------------------------------------------------------
+    if (raw.method === "session/request_permission") {
+      const toolCommand = raw.params?.toolCall?.rawInput?.command;
+      const patterns = readDb().allowedPatterns || [];
+
+      if (toolCommand && checkAllowedPattern(toolCommand, patterns)) {
+        logInfo("server", `[AUTO-APPROVE] Pattern matched: "${toolCommand}"`, threadId);
+
+        // Use the `agent` captured in this closure — it IS the live process.
+        // Never call ClaudeAgent.getInstance() here; that may return a stale
+        // or newly-constructed instance with no subprocess attached.
+        agent.send({
+          jsonrpc: "2.0",
+          id: raw.id,
+          result: { outcome: { outcome: "selected", optionId: "allow" } },
+        });
+
+        // Record what happened without triggering a permission bubble in UI
+        updateDb((db) => {
+          db.messages.push({
+            id: newId("msg-auto"),
+            threadId,
+            timestamp: new Date().toISOString(),
+            type: "permission_response",
+            raw: { autoApproved: true, command: toolCommand, selected: { optionId: "allow" } },
+          });
+          const t = db.threads.find((t) => t.id === threadId);
+          if (t) t.status = "thinking";
+        });
+
+        return; // Do NOT fall through to the normal store-and-process path
+      }
+    }
+
     updateDb((db) => {
       // Store the raw ACP message verbatim
       const msg: Message = {
@@ -157,7 +205,6 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
         const reason = raw.result.stopReason;
         logInfo("server", `stopReason=${reason} received, setting idle`, threadId);
         thread.status = "idle";
-        // Store error if not end_turn so the UI can surface it
         if (reason !== "end_turn") {
           thread.lastError = reason;
         } else {
@@ -174,8 +221,9 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
         return;
       }
 
-      // Agent requests permission → awaiting_permission
+      // Agent requests permission — no pattern matched, prompt the user
       if (raw.method === "session/request_permission") {
+        logInfo("server", `[PERMISSION REQUIRED] No pattern match for tool, awaiting user input`, threadId);
         thread.status = "awaiting_permission";
         thread.pendingPermissionId = raw.id;
         thread.pendingPermissionOptions = raw.params?.options ?? [];
@@ -213,6 +261,49 @@ app.get("/api/workspaces", (_req, res) => {
   const db = readDb();
   db.workspaces.forEach((ws) => ensureWorkspace(ws.id, ws.name));
   res.json(db.workspaces);
+});
+
+app.get("/api/allowedPatterns", (_req, res) => {
+  const db = readDb();
+  res.json(db.allowedPatterns);
+});
+
+app.post("/api/allowedPatterns", (req, res) => {
+  const { pattern } = req.body;
+  if (!pattern || typeof pattern !== "string") {
+    return res.status(400).json({ error: "pattern (string) required" });
+  }
+  let patterns: any[] = [];
+  updateDb((db) => {
+    db.allowedPatterns = db.allowedPatterns || [];
+    const exists = (db.allowedPatterns as any[]).some(
+      (p: any) => (p.pattern || p) === pattern
+    );
+    if (!exists) {
+      (db.allowedPatterns as any[]).push({
+        pattern,
+        variant: pattern.endsWith("*") ? "wildcard" : "exact",
+        createdAt: new Date().toISOString(),
+      });
+      logInfo("server", `Pattern saved via API: ${pattern}`, "global");
+    }
+    patterns = db.allowedPatterns;
+  });
+  res.status(201).json(patterns);
+});
+
+app.delete("/api/allowedPatterns", (req, res) => {
+  const { pattern } = req.body;
+  if (!pattern) return res.status(400).json({ error: "pattern required" });
+  let patterns: any[] = [];
+  updateDb((db) => {
+    db.allowedPatterns = db.allowedPatterns || [];
+    db.allowedPatterns = (db.allowedPatterns as any[]).filter(
+      (p: any) => (p.pattern || p) !== pattern
+    ) as any;
+    patterns = db.allowedPatterns;
+  });
+  res.json(patterns);
 });
 
 app.post("/api/workspaces", (req, res) => {
@@ -445,17 +536,110 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Routes — Permission responses
+// Helper: Generate pattern variants for "allow similar" behavior
 //
-// The UI reads thread.pendingPermissionId + thread.pendingPermissionOptions
-// and sends the chosen optionId back here. We forward the exact JSON-RPC
-// response ACP expects, verbatim.
+// Given a full tool command, generate variants:
+// - "exact": Full command (specific parameters)
+// - "tool": Command with parameters wildcard ("python main.py *")
+// - "category": Command prefix only ("python.exe *")
+// ---------------------------------------------------------------------------
+
+function generatePatternVariants(fullCommand: string): Array<{ variant: string; pattern: string; createdAt: string }> {
+  // Extract the base tool path and script name
+  // Example: "C:/Users/.../python.exe C:/Users/.../main.py text \"temp\" --max 5"
+  // Variants:
+  // 1. exact: Full command (rarely reused due to specific parameters)
+  // 2. tool: "C:/Users/.../python.exe C:/Users/.../main.py *" (any args to this tool)
+  // 3. category: "C:/Users/.../python.exe *" (any python script in that directory)
+
+  const createdAt = new Date().toISOString();
+
+  // Try to identify tool parts
+  const parts = fullCommand.split(/\s+/);
+  
+  const variants: any[] = [];
+
+  // Always add "exact" variant
+  variants.push({
+    variant: "exact",
+    pattern: fullCommand,
+    createdAt,
+  });
+
+  // If command has multiple parts, add "tool" variant (script + wildcard)
+  if (parts.length >= 2) {
+    // Assume first two parts are executable and script
+    const toolPattern = `${parts[0]} ${parts[1]} *`;
+    if (toolPattern !== fullCommand) {
+      variants.push({
+        variant: "tool",
+        pattern: toolPattern,
+        createdAt,
+      });
+    }
+  }
+
+  // If command starts with a path (executable), add "category" variant
+  if (parts.length >= 1 && (parts[0].includes("/") || parts[0].includes("\\"))) {
+    const executablePattern = `${parts[0]} *`;
+    if (executablePattern !== fullCommand && !variants.some(v => v.pattern === executablePattern)) {
+      variants.push({
+        variant: "category",
+        pattern: executablePattern,
+        createdAt,
+      });
+    }
+  }
+
+  return variants;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: Check if a command matches any stored pattern
+// ---------------------------------------------------------------------------
+
+function checkAllowedPattern(command: string, patterns: any[]): boolean {
+  if (!patterns || patterns.length === 0) return false;
+  if (!command || typeof command !== "string") return false;
+
+  for (const pattern of patterns) {
+    const pat = pattern.pattern || pattern; // Handle both old string format and new object format
+
+    // Simple wildcard matching
+    if (pat === "*") return true;
+
+    // If pattern ends with *, use prefix matching
+    if (pat.endsWith("*")) {
+      const prefix = pat.slice(0, -1); // Remove the *
+      if (command.startsWith(prefix)) return true;
+    } else {
+      // Exact match
+      if (command === pat) return true;
+    }
+  }
+
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Routes — Permission responses
 // ---------------------------------------------------------------------------
 
 app.post("/api/threads/:threadId/respond", async (req, res) => {
   const { threadId } = req.params;
-  const { optionId } = req.body;   // exact optionId string from ACP options list
-  if (!optionId) return res.status(400).json({ error: "optionId required" });
+  const { optionId, toolCommand } = req.body;
+
+  if (!optionId || typeof optionId !== "string") {
+    return res.status(400).json({ error: "optionId (string) required" });
+  }
+
+  // Do NOT whitelist valid option IDs here. ACP defines the valid options
+  // in the session/request_permission message; the UI only shows those exact
+  // buttons. Whatever the user clicked is already a valid ACP option.
+  // We just must never forward a UI-invented ID like "allow_similar".
+  if (optionId === "allow_similar") {
+    return res.status(400).json({ error: "allow_similar is a UI concept — save the pattern via POST /api/allowedPatterns, then send the ACP option (allow_once / allow_always)" });
+  }
 
   const db = readDb();
   const thread = db.threads.find((t) => t.id === threadId);
@@ -464,18 +648,27 @@ app.post("/api/threads/:threadId/respond", async (req, res) => {
     return res.status(400).json({ error: "no pending permission" });
   }
 
+  // If user selected "allow_always", save the exact tool command as a pattern
+  if (optionId === "allow_always" && toolCommand) {
+    updateDb((db) => {
+      db.allowedPatterns = db.allowedPatterns || [];
+      const exists = (db.allowedPatterns as any[]).some(
+        (p: any) => (p.pattern || p) === toolCommand
+      );
+      if (!exists) {
+        (db.allowedPatterns as any[]).push({ pattern: toolCommand, variant: "exact", createdAt: new Date().toISOString() });
+        logInfo("server", `Pattern saved (exact): ${toolCommand}`, threadId);
+      }
+    });
+  }
+
   // Look up the workspace to get its path
   const workspace = db.workspaces.find((ws) => ws.id === thread.workspaceId);
   const wsPath = workspace?.path || thread.workspaceId;
   const agent = ClaudeAgent.getInstance(threadId, wsPath);
   wireAgent(agent, threadId);
 
-  // Do NOT call agent.initialize() here — the agent process is already alive
-  // and mid-turn (that's how it sent the permission request). Calling
-  // session/load would replay session history and cause a race condition where
-  // the permission response arrives late and gets treated as a refusal.
-
-  // Send exactly what ACP expects: result.outcome structure
+  // Forward the optionId verbatim — it came from ACP's own options list
   agent.send({
     jsonrpc: "2.0",
     id: thread.pendingPermissionId,
@@ -489,7 +682,6 @@ app.post("/api/threads/:threadId/respond", async (req, res) => {
       t.pendingPermissionId = undefined;
       t.pendingPermissionOptions = undefined;
     }
-    // Record the response as a raw message too
     db.messages.push({
       id: newId("msg-perm"),
       threadId,
