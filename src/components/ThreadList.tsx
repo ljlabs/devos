@@ -40,7 +40,7 @@ export default function ThreadList({
   };
 
   return (
-    <section className="w-64 bg-[#0E0E11] border-r border-white/5 flex flex-col h-screen select-none">
+    <section className="hidden md:flex md:w-64 bg-[#0E0E11] border-r border-white/5 flex-col h-screen select-none">
       {/* Top Emerald button */}
       <div className="p-4 h-14 flex items-center border-b border-white/5 bg-[#0E0E11]">
         <button

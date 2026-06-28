@@ -37,19 +37,19 @@ export function WorkspaceModal({
   const isEditing = !!editingWorkspace;
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
-      <div className="bg-[#0E0E11] border border-white/10 rounded-xl w-full max-w-md overflow-hidden shadow-2xl relative">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 z-50 animate-fadeIn">
+      <div className="bg-[#0E0E11] border border-white/10 rounded-lg sm:rounded-xl w-full max-w-md max-h-[90vh] overflow-y-auto custom-scrollbar shadow-2xl relative">
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 p-1 rounded-lg text-slate-500 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+          className="absolute top-3 sm:top-4 right-3 sm:right-4 p-1 rounded-lg text-slate-500 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
         >
           <X size={16} />
         </button>
 
-        <form onSubmit={onSubmit} className="p-6 space-y-4">
+        <form onSubmit={onSubmit} className="p-4 sm:p-6 space-y-4">
           <div className="flex items-center gap-2 text-white pb-2 border-b border-white/5 select-none">
-            <FolderPlus size={18} className="text-emerald-400" />
-            <h3 className="text-base font-bold font-sans">
+            <FolderPlus size={18} className="text-emerald-400 flex-shrink-0" />
+            <h3 className="text-sm sm:text-base font-bold font-sans truncate">
               {isEditing ? "Edit Workspace" : "Register New Workspace"}
             </h3>
           </div>
@@ -62,13 +62,13 @@ export function WorkspaceModal({
 
           {error && (
             <div className="bg-rose-500/10 border border-rose-500/30 rounded-lg px-3 py-2.5">
-              <p className="text-xs text-rose-300 font-sans">{error}</p>
+              <p className="text-xs text-rose-300 font-sans break-words">{error}</p>
             </div>
           )}
 
           <div className="space-y-3 pt-2">
             <div>
-              <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-widest mb-1.5">
+              <label className="block text-[9px] sm:text-[10px] font-mono font-bold text-slate-400 uppercase tracking-widest mb-1.5">
                 Workspace Name
               </label>
               <input
@@ -80,12 +80,12 @@ export function WorkspaceModal({
                   if (error) setError("");
                 }}
                 placeholder="e.g. backend-services, task-dashboard"
-                className="w-full bg-[#18181B] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-colors"
+                className="w-full bg-[#18181B] border border-white/10 rounded-lg px-3 py-2 text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-colors"
               />
             </div>
 
             <div>
-              <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-widest mb-1.5">
+              <label className="block text-[9px] sm:text-[10px] font-mono font-bold text-slate-400 uppercase tracking-widest mb-1.5">
                 Absolute Machine Path
               </label>
               <input

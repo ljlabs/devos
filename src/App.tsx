@@ -10,6 +10,7 @@ import {
 import WorkspaceSidebar from "./components/WorkspaceSidebar";
 import ThreadList from "./components/ThreadList";
 import ChatCanvas from "./components/ChatCanvas";
+import MobileThreadNavigator from "./components/MobileThreadNavigator";
 import { WorkspaceModal, SettingsModal } from "./components/Dialogs";
 import { Workspace, Thread, Message } from "./types";
 
@@ -24,6 +25,7 @@ export default function App() {
   // Navigation / views
   const [activeView, setActiveView] = useState<'threads' | 'activity'>('threads');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showThreadListOnMobile, setShowThreadListOnMobile] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [globalLogs, setGlobalLogs] = useState<string[]>([]);
   const [threadLogs, setThreadLogs] = useState<Record<string, any[]>>({});
@@ -423,81 +425,111 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#0B0B0C] text-[#e4e2e4] font-sans antialiased">
-      {/* COLUMN 1: WORKSPACE SIDEBAR */}
-      <WorkspaceSidebar
-        workspaces={workspaces}
-        activeWorkspaceId={activeWorkspaceId}
-        onSelectWorkspace={(id) => {
-          setActiveWorkspaceId(id);
-          setActiveView('threads');
-        }}
-        onOpenNewWorkspace={handleOpenNewWorkspace}
-        onEditWorkspace={handleOpenEditWorkspace}
-        onDeleteWorkspace={handleDeleteWorkspace}
-        activeView={activeView}
-        onSelectView={setActiveView}
-        collapsed={sidebarCollapsed}
-        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-        onOpenSettings={() => setShowSettingsModal(true)}
-      />
+    <div className="flex flex-col md:flex-row h-screen w-screen overflow-hidden bg-[#0B0B0C] text-[#e4e2e4] font-sans antialiased">
+      {/* COLUMN 1: WORKSPACE SIDEBAR - Hidden on mobile, collapsible on tablet, fixed on desktop */}
+      <div className="hidden md:flex">
+        <WorkspaceSidebar
+          workspaces={workspaces}
+          activeWorkspaceId={activeWorkspaceId}
+          onSelectWorkspace={(id) => {
+            setActiveWorkspaceId(id);
+            setActiveView('threads');
+          }}
+          onOpenNewWorkspace={handleOpenNewWorkspace}
+          onEditWorkspace={handleOpenEditWorkspace}
+          onDeleteWorkspace={handleDeleteWorkspace}
+          activeView={activeView}
+          onSelectView={setActiveView}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+          onOpenSettings={() => setShowSettingsModal(true)}
+        />
+      </div>
+
+      {/* Mobile sidebar overlay - New nested navigator */}
+      {showThreadListOnMobile && (
+        <MobileThreadNavigator
+          workspaces={workspaces}
+          threads={threads.reduce((acc, thread) => {
+            if (!acc[thread.workspaceId]) acc[thread.workspaceId] = [];
+            acc[thread.workspaceId].push(thread);
+            return acc;
+          }, {} as Record<string, Thread[]>)}
+          activeWorkspaceId={activeWorkspaceId}
+          activeThreadId={activeThreadId}
+          onSelectWorkspace={(id) => {
+            setActiveWorkspaceId(id);
+            setActiveView('threads');
+          }}
+          onSelectThread={setActiveThreadId}
+          onOpenNewThread={handleCreateThreadQuick}
+          onRenameThread={handleRenameThread}
+          onDeleteThread={handleDeleteThread}
+          onClose={() => setShowThreadListOnMobile(false)}
+        />
+      )}
 
       {/* RENDER CONTENT PANELS ACCORDING TO NAVIGATION STATE */}
       {activeView === 'threads' && (
-        <>
-          {/* COLUMN 2: THREADS SELECTOR */}
-          <ThreadList
-            threads={threads}
-            activeThreadId={activeThreadId}
-            onSelectThread={setActiveThreadId}
-            onOpenNewThread={handleCreateThreadQuick}
-            onRenameThread={handleRenameThread}
-            onDeleteThread={handleDeleteThread}
-          />
+        <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+          {/* COLUMN 2: THREADS SELECTOR - Hidden on mobile, visible on tablet+ */}
+          <div className="hidden md:flex md:w-64">
+            <ThreadList
+              threads={threads}
+              activeThreadId={activeThreadId}
+              onSelectThread={setActiveThreadId}
+              onOpenNewThread={handleCreateThreadQuick}
+              onRenameThread={handleRenameThread}
+              onDeleteThread={handleDeleteThread}
+            />
+          </div>
 
-          {/* COLUMN 3: MAIN CHAT CANVAS */}
-          <ChatCanvas
-            activeThread={activeThread}
-            messages={messages}
-            inputText={inputText}
-            onChangeInput={setInputText}
-            onSendMessage={handleSendMessage}
-            onCancelAgent={handleCancelAgent}
-            onPermissionResponse={handlePermissionResponse}
-            onDeploy={handleDeploy}
-            isDeploying={isDeploying}
-            threadLogs={activeThreadLogs}
-            onClearThreadLogs={handleClearThreadLogs}
-            workspacePath={workspaces.find(w => w.id === activeWorkspaceId)?.path}
-          />
-        </>
+          {/* COLUMN 3: MAIN CHAT CANVAS - Full width on mobile */}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <ChatCanvas
+              activeThread={activeThread}
+              messages={messages}
+              inputText={inputText}
+              onChangeInput={setInputText}
+              onSendMessage={handleSendMessage}
+              onCancelAgent={handleCancelAgent}
+              onPermissionResponse={handlePermissionResponse}
+              onDeploy={handleDeploy}
+              isDeploying={isDeploying}
+              threadLogs={activeThreadLogs}
+              onClearThreadLogs={handleClearThreadLogs}
+              workspacePath={workspaces.find(w => w.id === activeWorkspaceId)?.path}
+              onToggleMobileNav={() => setShowThreadListOnMobile(!showThreadListOnMobile)}
+            />
+          </div>
+        </div>
       )}
 
       {/* GLOBAL LOGS VIEW PANEL */}
       {activeView === 'activity' && (
-        <main className="flex-1 flex flex-col bg-[#0B0B0C] overflow-hidden p-8 animate-fadeIn">
-          <div className="max-w-4xl w-full mx-auto space-y-6 flex flex-col h-full">
-            <div className="flex items-center gap-2 select-none pb-4 border-b border-white/5 justify-between shrink-0">
+        <main className="flex-1 flex flex-col bg-[#0B0B0C] overflow-hidden p-4 md:p-8 animate-fadeIn">
+          <div className="max-w-4xl w-full mx-auto space-y-4 md:space-y-6 flex flex-col h-full">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4 select-none pb-4 border-b border-white/5 justify-between shrink-0">
               <div className="flex items-center gap-2">
-                <History className="text-emerald-400" size={24} />
-                <h2 className="font-sans font-bold text-xl text-white">Global DevOS Activity Audit Trail</h2>
+                <History className="text-emerald-400 flex-shrink-0" size={20} />
+                <h2 className="font-sans font-bold text-base sm:text-lg md:text-xl text-white truncate">Global DevOS Activity Audit Trail</h2>
               </div>
               <button
                 onClick={() => setGlobalLogs([])}
-                className="text-xs text-rose-400 hover:text-rose-300 hover:underline cursor-pointer"
+                className="text-xs text-rose-400 hover:text-rose-300 hover:underline cursor-pointer whitespace-nowrap"
               >
                 Clear Log History
               </button>
             </div>
 
-            <div className="flex-1 bg-black/40 rounded-xl border border-white/5 p-6 font-mono text-xs text-slate-400 space-y-2 overflow-y-auto custom-scrollbar shadow-2xl">
+            <div className="flex-1 bg-black/40 rounded-lg md:rounded-xl border border-white/5 p-4 md:p-6 font-mono text-xs text-slate-400 space-y-2 overflow-y-auto custom-scrollbar shadow-2xl">
               {globalLogs.length === 0 ? (
                 <p className="text-slate-600 italic text-center py-12 font-sans">No diagnostic activities logged in current session.</p>
               ) : (
                 globalLogs.map((log, i) => (
-                  <p key={i} className="leading-relaxed border-b border-white/5 pb-1.5 last:border-none">
+                  <p key={i} className="leading-relaxed border-b border-white/5 pb-1.5 last:border-none text-slate-300">
                     <span className="text-emerald-500 font-bold mr-2">&gt;&gt;</span>
-                    {log}
+                    <span className="break-words">{log}</span>
                   </p>
                 ))
               )}

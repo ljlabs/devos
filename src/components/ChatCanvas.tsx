@@ -32,7 +32,8 @@ import {
   Layers,
   Sparkles,
   Zap,
-  Square
+  Square,
+  Menu
 } from "lucide-react";
 import { Message, Thread } from "../types";
 
@@ -73,6 +74,7 @@ interface ChatCanvasProps {
   threadLogs: any[];
   onClearThreadLogs: () => void;
   workspacePath?: string;
+  onToggleMobileNav?: () => void;
 }
 
 /**
@@ -388,6 +390,7 @@ export default function ChatCanvas({
   threadLogs,
   onClearThreadLogs,
   workspacePath,
+  onToggleMobileNav,
 }: ChatCanvasProps) {
   const [expandedToolId, setExpandedToolId] = useState<string | null>(null);
   const [showConsole, setShowConsole] = useState(false);
@@ -422,15 +425,15 @@ export default function ChatCanvas({
 
   if (!activeThread) {
     return (
-      <main className="flex-1 flex flex-col bg-[#0B0B0C] items-center justify-center p-8 select-none text-center">
+      <main className="flex-1 flex flex-col bg-[#0B0B0C] items-center justify-center p-4 sm:p-8 select-none text-center">
         <div className="max-w-md space-y-4 animate-fadeIn">
           <div className="w-16 h-16 bg-emerald-500/10 text-emerald-400 rounded-xl flex items-center justify-center mx-auto border border-emerald-500/20 shadow-[0_0_20px_rgba(16,185,129,0.1)]">
             <Cpu size={32} className="animate-pulse" />
           </div>
-          <h2 className="font-sans font-bold text-xl text-white tracking-tight">
+          <h2 className="font-sans font-bold text-lg sm:text-xl text-white tracking-tight px-2">
             Welcome to DevOS Multi-Agent Hub
           </h2>
-          <p className="text-sm text-slate-500 leading-relaxed">
+          <p className="text-xs sm:text-sm text-slate-500 leading-relaxed px-2">
             Select a project workspace from the left panel, then double-click any conversation thread or launch a "+ New Thread" to connect a background Claude ACP process runner.
           </p>
         </div>
@@ -440,72 +443,80 @@ export default function ChatCanvas({
 
   return (
     <main className="flex-1 flex flex-col bg-[#0B0B0C] overflow-hidden relative">
-      {/* Header bar */}
-      <header className="h-14 flex items-center justify-between px-6 border-b border-white/5 bg-[#0E0E11]/80 backdrop-blur-md z-10 sticky top-0 select-none">
-        <div className="flex items-center gap-3">
-          <Bot size={18} className="text-emerald-400" />
-          <div className="flex items-center gap-2 text-sm font-sans">
-            <h1 className="font-semibold text-white tracking-tight">{activeThread.title}</h1>
-            <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-500 text-[10px] border border-emerald-500/20 rounded font-mono uppercase">Running</span>
+      {/* Header bar - responsive */}
+      <header className="h-12 sm:h-14 flex items-center justify-between px-3 sm:px-6 border-b border-white/5 bg-[#0E0E11]/80 backdrop-blur-md z-10 sticky top-0 select-none gap-2">
+        {/* Mobile nav toggle */}
+        <button 
+          onClick={onToggleMobileNav}
+          className="md:hidden p-1.5 hover:bg-white/5 rounded-md text-slate-400 hover:text-white transition-colors cursor-pointer"
+          title="Toggle thread list"
+        >
+          <Menu size={18} />
+        </button>
+
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <Bot size={16} className="text-emerald-400 flex-shrink-0 hidden sm:block" />
+          <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm font-sans min-w-0">
+            <h1 className="font-semibold text-white tracking-tight truncate">{activeThread.title}</h1>
+            <span className="px-1.5 sm:px-2 py-0.5 bg-emerald-500/10 text-emerald-500 text-[9px] sm:text-[10px] border border-emerald-500/20 rounded font-mono uppercase whitespace-nowrap flex-shrink-0">Running</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 ml-auto">
           {/* Toggle local virtual terminal */}
           <button 
             onClick={() => setShowConsole(!showConsole)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-mono transition-colors border cursor-pointer ${
+            className={`flex items-center gap-1 px-2 sm:px-3 py-1 sm:py-1.5 rounded-md text-xs font-mono transition-colors border cursor-pointer ${
               showConsole 
                 ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" 
                 : "border-white/10 text-slate-400 hover:text-white"
             }`}
+            title="Toggle thread logs"
           >
             <Terminal size={14} />
-            <span>Thread Log</span>
+            <span className="hidden sm:inline">Thread Log</span>
           </button>
-          
-          <div className="h-4 w-[1px] bg-white/5 mx-1" />
-
-          {/* Trigger interactive cloud run deployment simulation */}
           <button 
             onClick={onDeploy}
             disabled={isDeploying}
-            className={`px-3 py-1.5 bg-white text-black text-xs font-bold rounded-md hover:bg-slate-200 transition-colors shadow-md active:scale-95 disabled:opacity-50 cursor-pointer`}
+            className={`px-2 sm:px-3 py-1 sm:py-1.5 bg-white text-black text-xs font-bold rounded-md hover:bg-slate-200 transition-colors shadow-md active:scale-95 disabled:opacity-50 cursor-pointer whitespace-nowrap`}
+            title={isDeploying ? "Deploying..." : "Deploy to Cloud Run"}
           >
-            {isDeploying ? "Deploying..." : "Deploy Cloud Run"}
+            <span className="hidden sm:inline">{isDeploying ? "Deploying..." : "Deploy Cloud Run"}</span>
+            <span className="sm:hidden">{isDeploying ? "..." : "Deploy"}</span>
           </button>
 
           {/* User profile avatar */}
-          <div className="w-8 h-8 rounded-full border border-emerald-500/20 overflow-hidden bg-emerald-500/5 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-full border border-emerald-500/20 overflow-hidden bg-emerald-500/5 flex items-center justify-center flex-shrink-0">
             <User size={16} className="text-emerald-400" />
           </div>
         </div>
       </header>
 
-      {/* Floating Thread Log panel */}
+      {/* Floating Thread Log panel - responsive */}
       {showConsole && (
-        <div className="absolute top-14 left-0 w-full h-56 bg-[#111114] border-b border-white/5 p-4 font-mono text-[11px] text-slate-300 overflow-y-auto custom-scrollbar z-20 shadow-2xl">
-          <div className="flex justify-between items-center text-slate-500 pb-2 border-b border-slate-900 mb-2 select-none">
-            <span>THREAD LOG — {activeThread.title}</span>
-            <div className="flex items-center gap-3">
-              <button onClick={onClearThreadLogs} className="hover:text-slate-300 text-[10px]">clear</button>
-              <button onClick={() => setShowConsole(false)} className="hover:text-slate-300">close</button>
+        <div className="absolute top-12 sm:top-14 left-0 w-full max-h-56 sm:max-h-64 bg-[#111114] border-b border-white/5 p-3 sm:p-4 font-mono text-[10px] sm:text-[11px] text-slate-300 overflow-y-auto custom-scrollbar z-20 shadow-2xl">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center text-slate-500 pb-2 border-b border-slate-900 mb-2 select-none gap-2">
+            <span className="truncate text-xs">THREAD LOG — {activeThread.title}</span>
+            <div className="flex items-center gap-3 whitespace-nowrap">
+              <button onClick={onClearThreadLogs} className="hover:text-slate-300 text-[9px] sm:text-[10px]">clear</button>
+              <button onClick={() => setShowConsole(false)} className="hover:text-slate-300 text-xs">close</button>
             </div>
           </div>
           <div className="space-y-1">
             {threadLogs.length === 0 ? (
-              <p className="text-slate-600 italic">No ACP messages logged yet for this thread.</p>
+              <p className="text-slate-600 italic text-xs">No ACP messages logged yet for this thread.</p>
             ) : (
               threadLogs.map((log, i) => {
                 const time = new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                 return (
                   <p key={i} className="leading-relaxed border-b border-white/5 pb-1 last:border-none">
                     <span className="text-emerald-500 font-bold mr-1">&gt;&gt;</span>
-                    <span className="text-slate-600 mr-2">{time}</span>
+                    <span className="text-slate-600 mr-2 hidden sm:inline">{time}</span>
                     <span className={`mr-1 ${log.level === 'error' ? 'text-red-400' : 'text-cyan-400'}`}>
                       [{log.component}]
                     </span>
-                    <span className="text-slate-400">{log.message}</span>
+                    <span className="text-slate-400 break-words">{log.message}</span>
                   </p>
                 );
               })
@@ -515,7 +526,7 @@ export default function ChatCanvas({
       )}
 
       {/* Main chat conversation window */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar pb-32">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 sm:space-y-8 custom-scrollbar pb-32 md:pb-40">
         
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center space-y-4 max-w-md mx-auto py-12 select-none">
@@ -532,15 +543,15 @@ export default function ChatCanvas({
             const parsed = getMessageContent(msg);
             if (!parsed) return null;
 
-            // 1. User message bubble
+            // 1. User message bubble - responsive
             if (parsed.type === "user") {
               return (
-                <div key={msg.id} className="flex justify-end max-w-4xl mx-auto w-full group animate-fadeIn select-text">
-                  <div className="max-w-[80%] bg-[#18181B] border border-white/5 p-4 rounded-2xl rounded-tr-none">
-                    <p className="text-sm leading-relaxed text-slate-200 whitespace-pre-wrap break-words">
+                <div key={msg.id} className="flex justify-end max-w-4xl mx-auto w-full group animate-fadeIn select-text px-2 sm:px-0">
+                  <div className="max-w-[85%] sm:max-w-[80%] bg-[#18181B] border border-white/5 p-3 sm:p-4 rounded-lg sm:rounded-2xl rounded-tr-none text-xs sm:text-sm">
+                    <p className="leading-relaxed text-slate-200 whitespace-pre-wrap break-words">
                       {parsed.content}
                     </p>
-                    <div className="text-[10px] text-slate-500 font-mono mt-2 text-right select-none">
+                    <div className="text-[9px] sm:text-[10px] text-slate-500 font-mono mt-2 text-right select-none">
                       {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </div>
                   </div>
@@ -548,21 +559,21 @@ export default function ChatCanvas({
               );
             }
 
-            // 2. Agent text response
+            // 2. Agent text response - responsive
             if (parsed.type === "agent_text") {
               const textContent = parsed.content;
               if (!textContent) return null;
 
               return (
-                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text">
-                  <div className="w-8 h-8 bg-emerald-500/20 border border-emerald-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.15)] select-none">
-                    <Bot size={16} className="text-emerald-400" />
+                <div key={msg.id} className="flex justify-start gap-2 sm:gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text px-2 sm:px-0">
+                  <div className="w-7 h-7 sm:w-8 sm:h-8 bg-emerald-500/20 border border-emerald-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.15)] select-none">
+                    <Bot size={14} className="text-emerald-400" />
                   </div>
-                  <div className="flex-1 max-w-[90%]">
-                    <div className="bg-[#0E0E11] border border-white/5 p-5 rounded-2xl rounded-tl-none">
-                      <div className="flex items-center justify-between pb-2 mb-3 border-b border-white/5 select-none text-[10px] font-mono tracking-widest text-emerald-400 font-bold">
+                  <div className="flex-1 max-w-[90%] sm:max-w-[90%]">
+                    <div className="bg-[#0E0E11] border border-white/5 p-3 sm:p-5 rounded-lg sm:rounded-2xl rounded-tl-none text-xs sm:text-sm">
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-2 mb-3 border-b border-white/5 select-none text-[9px] sm:text-[10px] font-mono tracking-widest text-emerald-400 font-bold gap-1 sm:gap-0">
                         <span>CLAUDE AI AGENT</span>
-                        <span className="text-slate-500 font-normal">
+                        <span className="text-slate-500 font-normal whitespace-nowrap">
                           {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
@@ -955,17 +966,17 @@ export default function ChatCanvas({
         </div>
       )}
 
-      {/* Floating Input text area layer */}
-      <div className="absolute bottom-0 left-0 w-full p-4 bg-gradient-to-t from-[#0B0B0C] via-[#0B0B0C]/95 to-transparent select-none z-10">
-        <div className="max-w-4xl mx-auto relative group">
-          <div className="absolute -inset-0.5 bg-emerald-500/10 rounded-xl blur opacity-30 group-focus-within:opacity-100 transition duration-500 animate-pulse" />
-          <div className="relative bg-[#0E0E11] border border-white/10 rounded-xl p-3 flex items-end gap-3 shadow-2xl">
+      {/* Floating Input text area layer - responsive */}
+      <div className="absolute bottom-0 left-0 w-full p-2 sm:p-4 bg-gradient-to-t from-[#0B0B0C] via-[#0B0B0C]/95 to-transparent select-none z-10">
+        <div className="max-w-4xl mx-auto px-2 sm:px-0 relative group">
+          <div className="absolute -inset-0.5 bg-emerald-500/10 rounded-lg sm:rounded-xl blur opacity-30 group-focus-within:opacity-100 transition duration-500 animate-pulse" />
+          <div className="relative bg-[#0E0E11] border border-white/10 rounded-lg sm:rounded-xl p-2 sm:p-3 flex items-end gap-2 sm:gap-3 shadow-2xl">
             {/* Attachment icon trigger */}
             <button 
-              className="p-1.5 text-slate-500 hover:text-emerald-400 rounded-lg hover:bg-white/5 transition-colors cursor-pointer shrink-0"
+              className="p-1 sm:p-1.5 text-slate-500 hover:text-emerald-400 rounded-lg hover:bg-white/5 transition-colors cursor-pointer shrink-0"
               title="Attach code snippet context files"
             >
-              <Paperclip size={16} />
+              <Paperclip size={14} className="sm:w-4 sm:h-4" />
             </button>
             
             <textarea
@@ -974,32 +985,32 @@ export default function ChatCanvas({
               onChange={(e) => handleTextareaChange(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={isAgentBusy}
-              className="flex-1 bg-transparent border-none focus:outline-none focus:ring-0 text-sm font-sans text-slate-200 placeholder-slate-600 resize-none py-1.5 max-h-60 overflow-y-auto custom-scrollbar disabled:opacity-40 disabled:cursor-not-allowed"
-              placeholder={isAgentBusy ? "Agent is busy..." : "Type a command or ask Claude to do something..."}
+              className="flex-1 bg-transparent border-none focus:outline-none focus:ring-0 text-xs sm:text-sm font-sans text-slate-200 placeholder-slate-600 resize-none py-1.5 max-h-60 overflow-y-auto custom-scrollbar disabled:opacity-40 disabled:cursor-not-allowed"
+              placeholder={isAgentBusy ? "Agent is busy..." : "Type a command or ask Claude..."}
               rows={1}
-              style={{ caretColor: "#10b981", height: "auto", minHeight: "40px" }}
+              style={{ caretColor: "#10b981", height: "auto", minHeight: "32px" }}
             />
 
             {isAgentBusy ? (
               <button
                 onClick={onCancelAgent}
-                className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors cursor-pointer"
+                className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl flex items-center justify-center shrink-0 bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors cursor-pointer"
                 title="Cancel agent turn"
               >
-                <Square size={16} />
+                <Square size={14} className="sm:w-4 sm:h-4" />
               </button>
             ) : (
               <button
                 onClick={onSendMessage}
                 disabled={!inputText.trim()}
-                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
+                className={`w-8 h-8 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
                   inputText.trim()
                     ? "bg-emerald-500 text-black hover:bg-emerald-400"
                     : "bg-white/5 text-slate-600 cursor-not-allowed"
                 }`}
                 title="Stream instructions"
               >
-                <Send size={16} />
+                <Send size={14} className="sm:w-4 sm:h-4" />
               </button>
             )}
           </div>
