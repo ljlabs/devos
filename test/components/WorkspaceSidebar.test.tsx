@@ -119,20 +119,17 @@ describe("WorkspaceSidebar", () => {
       const user = userEvent.setup();
       render(<WorkspaceSidebar {...baseProps} workspaces={sampleWorkspaces} />);
 
-      await user.click(screen.getByText("Search Code"));
-      expect(mockOnSelectView).toHaveBeenCalledWith("search");
+      await user.click(screen.getByText("Threads"));
+      expect(mockOnSelectView).toHaveBeenCalledWith("threads");
 
       await user.click(screen.getByText("Global Logs"));
       expect(mockOnSelectView).toHaveBeenCalledWith("activity");
-
-      await user.click(screen.getByText("Gatekeeping Rules"));
-      expect(mockOnSelectView).toHaveBeenCalledWith("security");
     });
 
     it("highlights the active view", () => {
-      render(<WorkspaceSidebar {...baseProps} workspaces={sampleWorkspaces} activeView="search" />);
-      const searchBtn = screen.getByText("Search Code").closest("button")!;
-      expect(searchBtn.className).toContain("bg-emerald-500/5");
+      render(<WorkspaceSidebar {...baseProps} workspaces={sampleWorkspaces} activeView="threads" />);
+      const threadsBtn = screen.getByText("Threads").closest("button")!;
+      expect(threadsBtn.className).toContain("bg-emerald-500/5");
     });
   });
 

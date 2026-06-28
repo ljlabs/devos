@@ -55,8 +55,19 @@ describe("WorkspaceModal", () => {
     expect(screen.getByDisplayValue("/Users/dev/ws")).toBeInTheDocument();
   });
 
-  it("path input is disabled", () => {
+  it("path input is enabled when creating new workspace", () => {
     render(<WorkspaceModal {...defaultProps} />);
+    const pathInput = screen.getByPlaceholderText("/Users/developer/projects/...");
+    expect(pathInput).not.toBeDisabled();
+  });
+
+  it("path input is disabled when editing existing workspace", () => {
+    render(
+      <WorkspaceModal
+        {...defaultProps}
+        editingWorkspace={{ id: "ws-1", name: "my-ws", path: "/ws" }}
+      />
+    );
     const pathInput = screen.getByPlaceholderText("/Users/developer/projects/...");
     expect(pathInput).toBeDisabled();
   });

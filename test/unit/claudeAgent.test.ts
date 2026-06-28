@@ -71,7 +71,23 @@ function injectProc(agent: ClaudeAgent, proc: any) {
     agent.emit("message", msg);
   });
 
-  // Wire close event
+  // Register error handler (from spawnProcess)
+  proc.on("error", (err: any) => {
+    (agent as any).rejectAllPending(err);
+    (agent as any).proc = null;
+    (agent as any).initialized = false;
+    agent.emit("close");
+  });
+
+  // Register close handler (from spawnProcess)
+  proc.on("close", (code: any) => {
+    (agent as any).rejectAllPending(new Error("ACP process exited"));
+    (agent as any).proc = null;
+    (agent as any).initialized = false;
+    agent.emit("close");
+  });
+
+  // Wire close event when stdout ends
   proc.stdout.on("end", () => {
     (agent as any).proc = null;
     (agent as any).initialized = false;
@@ -247,7 +263,7 @@ describe("ClaudeAgent", () => {
       expect(sessionId).toBe("existing-sid");
     });
 
-    it("falls through to session/new when session/load fails", async () => {
+    it("rejects when session/load fails", async () => {
       const written = trackStdin();
       const agent = ClaudeAgent.getInstance("thread-init-fallback", "/ws");
       injectProc(agent, mockProc);
@@ -265,12 +281,92 @@ describe("ClaudeAgent", () => {
         error: { code: -32603, message: "session not found" },
       });
 
+      // The promise should reject with the error
+      await expect(initPromise).rejects.toEqual({
+        code: -32603,
+        message: "session not found",
+      });
+
+      // Verify that session/new was NOT called (no fallthrough)
+      await new Promise((r) => setTimeout(r, 100));
+      expect(written.some((m) => m.method === "session/new")).toBe(false);
+    });
+
+    it("is idempotent — second call skips initialize RPC", async () => {
+      const written = trackStdin();
+      const agent = ClaudeAgent.getInstance("thread-init-idem", "/ws");
+      injectProc(agent, mockProc);
+
+      // First initialization
+      const init1 = agent.initialize();
+      await waitFor(() => written.some((m) => m.method === "initialize"));
+      const initReq1 = written.find((m) => m.method === "initialize");
+      pushToStdout({ jsonrpc: "2.0", id: initReq1.id, result: {} });
+
+      await waitFor(() => written.some((m) => m.method === "session/new"));
+      const newReq1 = written.find((m) => m.method === "session/new");
+      pushToStdout({ jsonrpc: "2.0", id: newReq1.id, result: { sessionId: "sid-1" } });
+
+      const sid1 = await init1;
+      expect(sid1).toBe("sid-1");
+
+      // Count how many times initialize was sent
+      const initCount = written.filter((m) => m.method === "initialize").length;
+      expect(initCount).toBe(1);
+
+      // Second initialization should skip the initialize RPC and go straight to session/new
+      const init2 = agent.initialize();
+
+      // Verify no new initialize RPC was sent
+      await new Promise((r) => setTimeout(r, 100));
+      const initCountAfter = written.filter((m) => m.method === "initialize").length;
+      expect(initCountAfter).toBe(1); // Still 1, not 2
+
+      // Complete the second init
+      const newReq2 = written.find(
+        (m, idx) => m.method === "session/new" && idx > written.indexOf(newReq1!)
+      );
+      if (newReq2) {
+        pushToStdout({ jsonrpc: "2.0", id: newReq2.id, result: { sessionId: "sid-2" } });
+      }
+
+      const sid2 = await init2;
+      expect(sid2).toBe("sid-2");
+    });
+
+    it("already-loaded session does not call initialize RPC again", async () => {
+      const written = trackStdin();
+      const agent = ClaudeAgent.getInstance("thread-init-loaded", "/ws");
+      injectProc(agent, mockProc);
+
+      // First init to get a sessionId
+      const init1 = agent.initialize();
+      await waitFor(() => written.some((m) => m.method === "initialize"));
+      const initReq = written.find((m) => m.method === "initialize");
+      pushToStdout({ jsonrpc: "2.0", id: initReq.id, result: {} });
+
       await waitFor(() => written.some((m) => m.method === "session/new"));
       const newReq = written.find((m) => m.method === "session/new");
-      pushToStdout({ jsonrpc: "2.0", id: newReq.id, result: { sessionId: "new-sid" } });
+      pushToStdout({ jsonrpc: "2.0", id: newReq.id, result: { sessionId: "existing-sid" } });
 
-      const sessionId = await initPromise;
-      expect(sessionId).toBe("new-sid");
+      const sessionId = await init1;
+
+      // Clear written to track only the second init
+      written.length = 0;
+
+      // Second init with the existing sessionId — should not call initialize again
+      const init2 = agent.initialize(sessionId);
+
+      await waitFor(() => written.some((m) => m.method === "session/load"));
+      const loadReq = written.find((m) => m.method === "session/load");
+      pushToStdout({ jsonrpc: "2.0", id: loadReq.id, result: { sessionId } });
+
+      const result = await init2;
+      expect(result).toBe(sessionId);
+
+      // Verify initialize was NOT called in this second batch
+      const initCallCount = written.filter((m) => m.method === "initialize").length;
+      expect(initCallCount).toBe(0);
     });
   });
 
