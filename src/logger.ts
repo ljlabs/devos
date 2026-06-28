@@ -11,8 +11,14 @@ import path from "path";
 const LOG_DB_PATH = path.join(process.cwd(), "logs.db");
 
 let db: Database.Database;
+let testDb: Database.Database | null = null;
 
 function getDb(): Database.Database {
+  // For testing: allow overriding the database
+  if (testDb) {
+    return testDb;
+  }
+
   if (!db) {
     db = new Database(LOG_DB_PATH);
     db.pragma("journal_mode = WAL");
@@ -28,6 +34,14 @@ function getDb(): Database.Database {
     `);
   }
   return db;
+}
+
+/**
+ * For testing: override the database instance
+ * @internal
+ */
+export function __setTestDb(database: Database.Database | null): void {
+  testDb = database;
 }
 
 export interface LogEntry {
