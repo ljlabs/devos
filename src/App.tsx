@@ -3,11 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
-  Search,
-  History,
-  ShieldCheck
+  History
 } from "lucide-react";
 import WorkspaceSidebar from "./components/WorkspaceSidebar";
 import ThreadList from "./components/ThreadList";
@@ -24,12 +22,13 @@ export default function App() {
   const [inputText, setInputText] = useState<string>("");
 
   // Navigation / views
-  const [activeView, setActiveView] = useState<'threads' | 'search' | 'activity' | 'security'>('threads');
-  const [searchQuery, setSearchQuery] = useState("");
+  const [activeView, setActiveView] = useState<'threads' | 'activity'>('threads');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [globalLogs, setGlobalLogs] = useState<string[]>([]);
-  const [searchResult, setSearchResult] = useState<any[]>([]);
+  const [threadLogs, setThreadLogs] = useState<Record<string, any[]>>({});
+  const threadSseRef = useRef<EventSource | null>(null);
+  const globalSseRef = useRef<EventSource | null>(null);
 
   // Dialog states (workspace modal)
   const [showWorkspaceModal, setShowWorkspaceModal] = useState(false);
@@ -95,19 +94,59 @@ export default function App() {
     const initialize = async () => {
       setIsLoading(true);
       await fetchWorkspaces();
-
-      setGlobalLogs([
-        `[${new Date(Date.now() - 3600000).toLocaleTimeString()}] DevOS ACP Background state controller initialized.`,
-        `[${new Date(Date.now() - 3200000).toLocaleTimeString()}] Connected local folders to SQLite single-file database.`,
-        `[${new Date(Date.now() - 2800000).toLocaleTimeString()}] Registered workspace project: frontend-auth`,
-        `[${new Date(Date.now() - 2400000).toLocaleTimeString()}] Bound Claude Code client thread 'Refactor API' to local ACP runner`,
-        `[${new Date(Date.now() - 120000).toLocaleTimeString()}] User submitted workspace query: 'Refactor routes.js'`,
-        `[${new Date(Date.now() - 90000).toLocaleTimeString()}] Claude Code triggered ACP action: 'rm -rf dist && npm run build' (Pending Clearance)`
-      ]);
-
       setIsLoading(false);
     };
     initialize();
+  }, []);
+
+  // SSE: Thread log streaming for active thread
+  useEffect(() => {
+    if (threadSseRef.current) {
+      threadSseRef.current.close();
+      threadSseRef.current = null;
+    }
+    if (!activeThreadId) return;
+
+    const es = new EventSource(`/api/threads/${activeThreadId}/logs`);
+    threadSseRef.current = es;
+
+    es.onmessage = (event) => {
+      try {
+        const log = JSON.parse(event.data);
+        setThreadLogs(prev => ({
+          ...prev,
+          [activeThreadId]: [log, ...(prev[activeThreadId] || [])],
+        }));
+      } catch {}
+    };
+
+    return () => {
+      es.close();
+      threadSseRef.current = null;
+    };
+  }, [activeThreadId]);
+
+  // SSE: Global activity log streaming
+  useEffect(() => {
+    const es = new EventSource("/api/logs");
+    globalSseRef.current = es;
+
+    es.onmessage = (event) => {
+      try {
+        const log = JSON.parse(event.data);
+        if (log.thread_id) {
+          setGlobalLogs(prev => [
+            `[${new Date(log.timestamp).toLocaleTimeString()}] [${log.component}:${log.thread_id.slice(0, 12)}] ${log.message}`,
+            ...prev
+          ]);
+        }
+      } catch {}
+    };
+
+    return () => {
+      es.close();
+      globalSseRef.current = null;
+    };
   }, []);
 
   // Update threads when active workspace changes
@@ -128,6 +167,13 @@ export default function App() {
 
   const activeThread = threads.find(t => t.id === activeThreadId) || null;
   const activeThreadStatus = activeThread?.status;
+  const activeThreadLogs = activeThreadId ? (threadLogs[activeThreadId] || []) : [];
+
+  const handleClearThreadLogs = () => {
+    if (activeThreadId) {
+      setThreadLogs(prev => ({ ...prev, [activeThreadId]: [] }));
+    }
+  };
 
   // Polling
   useEffect(() => {
@@ -325,6 +371,26 @@ export default function App() {
     }
   };
 
+  // Cancel agent turn
+  const handleCancelAgent = async () => {
+    if (!activeThreadId) return;
+    try {
+      const res = await fetch(`/api/threads/${activeThreadId}/cancel`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        setGlobalLogs(prev => [
+          `[${new Date().toLocaleTimeString()}] Agent turn cancelled`,
+          ...prev
+        ]);
+        await fetchMessages(activeThreadId);
+        await fetchThreads(activeWorkspaceId);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   // Deploy Cloud Run action simulation
   const handleDeploy = () => {
     setIsDeploying(true);
@@ -342,23 +408,6 @@ export default function App() {
       alert("Deployment Successful! Service initialized on Cloud Run: https://devos-runner-4876.run.app");
     }, 2500);
   };
-
-  // Code search simulation
-  useEffect(() => {
-    if (!searchQuery.trim()) {
-      setSearchResult([]);
-      return;
-    }
-    const filtered = [
-      { file: "/src/api/routes.js", preview: "router.get('/users', UserController.getAllUsers);" },
-      { file: "/src/api/UserController.js", preview: "export const UserController = { getAllUsers..." },
-      { file: "/src/auth/jwt.ts", preview: "export function signToken(payload) {..." }
-    ].filter(item =>
-      item.file.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.preview.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-    setSearchResult(filtered);
-  }, [searchQuery]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#0B0B0C] text-[#e4e2e4] font-sans antialiased">
@@ -399,64 +448,14 @@ export default function App() {
             inputText={inputText}
             onChangeInput={setInputText}
             onSendMessage={handleSendMessage}
+            onCancelAgent={handleCancelAgent}
             onPermissionResponse={handlePermissionResponse}
             onDeploy={handleDeploy}
             isDeploying={isDeploying}
+            threadLogs={activeThreadLogs}
+            onClearThreadLogs={handleClearThreadLogs}
           />
         </>
-      )}
-
-      {/* SEARCH VIEW PANEL */}
-      {activeView === 'search' && (
-        <main className="flex-1 flex flex-col bg-[#0B0B0C] overflow-hidden p-8 animate-fadeIn">
-          <div className="max-w-4xl w-full mx-auto space-y-6">
-            <div className="flex items-center gap-2 select-none pb-4 border-b border-white/5">
-              <Search className="text-emerald-400" size={24} />
-              <h2 className="font-sans font-bold text-xl text-white">Search Local Workspace Directory</h2>
-            </div>
-
-            <div className="relative">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search class declarations, endpoints, functions or keywords..."
-                className="w-full bg-[#0E0E11] border border-white/10 rounded-xl px-5 py-4 pl-12 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all font-sans"
-              />
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-            </div>
-
-            <div className="space-y-3 pt-4 overflow-y-auto max-h-[60vh] custom-scrollbar pr-2">
-              {searchResult.length === 0 ? (
-                <p className="text-sm text-slate-500 font-sans italic text-center py-12">
-                  {searchQuery ? "No matches found in active repository." : "Type keywords to search code files indexed by the workspace indexer."}
-                </p>
-              ) : (
-                searchResult.map((res, i) => (
-                  <div
-                    key={i}
-                    className="p-4 rounded-lg bg-[#0E0E11] border border-white/5 hover:border-emerald-500/20 cursor-pointer transition-all space-y-2 group"
-                    onClick={() => {
-                      setActiveView('threads');
-                      handleCreateThreadQuick();
-                    }}
-                  >
-                    <div className="flex justify-between items-center select-none">
-                      <span className="font-mono text-xs text-emerald-400 font-semibold">{res.file}</span>
-                      <span className="text-[10px] font-mono text-slate-500 group-hover:text-emerald-400 flex items-center gap-1 transition-colors">
-                        Launch inspection thread
-                        <span>+</span>
-                      </span>
-                    </div>
-                    <pre className="font-mono text-xs text-slate-300 bg-black/40 p-2.5 rounded-md border border-white/5 overflow-x-auto">
-                      <code>{res.preview}</code>
-                    </pre>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </main>
       )}
 
       {/* GLOBAL LOGS VIEW PANEL */}
@@ -487,24 +486,6 @@ export default function App() {
                   </p>
                 ))
               )}
-            </div>
-          </div>
-        </main>
-      )}
-
-      {/* GATEKEEPING RULES VIEW PANEL */}
-      {activeView === 'security' && (
-        <main className="flex-1 flex flex-col bg-[#0B0B0C] overflow-hidden p-8 animate-fadeIn">
-          <div className="max-w-4xl w-full mx-auto h-full flex items-center justify-center">
-            <div className="text-center space-y-4 select-none">
-              <ShieldCheck className="w-16 h-16 text-emerald-400 mx-auto opacity-20" />
-              <h2 className="font-sans font-bold text-xl text-white">Permissions Managed by ACP</h2>
-              <p className="text-sm text-slate-400 max-w-md mx-auto">
-                Permission requests are now managed dynamically by the Agent Client Protocol. When Claude requests access to files or system resources, you'll see interactive permission prompts in the chat.
-              </p>
-              <p className="text-xs text-slate-500 font-mono mt-4">
-                All permission decisions are routed through the ACP session/request_permission protocol.
-              </p>
             </div>
           </div>
         </main>

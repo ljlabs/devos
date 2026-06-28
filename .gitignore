@@ -8,3 +8,4 @@ coverage/
 !.env.example
 sandbox_workspaces/*
 db.json
+**/*.db*

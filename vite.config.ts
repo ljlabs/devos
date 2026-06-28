@@ -25,7 +25,11 @@ export default defineConfig(() => {
           const normalized = filePath.replace(/\\/g, '/');
           return (
             normalized.endsWith('/db.json') ||
-            normalized.includes('/sandbox_workspaces/')
+            normalized.endsWith('/logs.db') ||
+            normalized.endsWith('/logs.db-wal') ||
+            normalized.endsWith('/logs.db-shm') ||
+            normalized.includes('/sandbox_workspaces/') ||
+            normalized.includes('/.claude/')
           );
         },
       },
