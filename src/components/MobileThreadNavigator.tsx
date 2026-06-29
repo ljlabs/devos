@@ -32,6 +32,8 @@ export default function MobileThreadNavigator({
   onOpenNewThread,
   onRenameThread,
   onDeleteThread,
+  onEditWorkspace,
+  onDeleteWorkspace,
   onClose
 }: MobileThreadNavigatorProps) {
   const [expandedWorkspace, setExpandedWorkspace] = useState<string>(activeWorkspaceId);

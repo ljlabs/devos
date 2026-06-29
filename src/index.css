@@ -7,6 +7,13 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
+#root {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
 /* Responsive scrollbar sizing for mobile */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
@@ -35,6 +42,31 @@
 html {
   -webkit-text-size-adjust: 100%;
   -ms-text-size-adjust: 100%;
+  height: 100%;
+  overflow: hidden;
+  width: 100%;
+  position: fixed;
+}
+
+body {
+  margin: 0;
+  height: 100vh;
+  height: 100dvh; /* Dynamic viewport height - accounts for mobile keyboard */
+  overflow: hidden;
+  width: 100%;
+  overscroll-behavior: none;
+  position: fixed;
+  /* Do NOT use -webkit-overflow-scrolling: touch on body, causes flicker */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+}
+
+#root {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Prevent zoom on inputs on mobile */
@@ -43,6 +75,26 @@ html {
   textarea,
   select {
     font-size: 16px !important;
+  }
+
+  /* Prevent double-tap zoom */
+  html {
+    touch-action: manipulation;
+  }
+
+  /* Smooth scrolling for momentum scrolling */
+  .custom-scrollbar {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Prevent flickering during keyboard open/close */
+  #root {
+    transition: none;
+  }
+
+  /* Use will-change sparingly to prevent layout thrashing */
+  textarea {
+    will-change: auto;
   }
 }
 

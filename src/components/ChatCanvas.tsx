@@ -404,9 +404,6 @@ export default function ChatCanvas({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const inputWrapperRef = useRef<HTMLDivElement>(null);
-  const [inputHeight, setInputHeight] = useState(0);
-
   // Auto-scroll to bottom — only when user is already near the bottom,
   // so scrolling up to read long responses is not disrupted.
   const isNearBottom = () => {
@@ -421,38 +418,15 @@ export default function ChatCanvas({
     }
   }, [messages]);
 
-  // Keep track of the input wrapper height so the scroll area can pad itself
-  // to the exact height of the floating input — preventing it from ever
-  // covering the last message or a permission bubble.
-  useEffect(() => {
-    const wrapper = inputWrapperRef.current;
-    if (!wrapper) return;
-    // Initial measurement
-    setInputHeight(wrapper.offsetHeight);
-    const observer = new ResizeObserver(() => {
-      setInputHeight(wrapper.offsetHeight);
-    });
-    observer.observe(wrapper);
-    return () => observer.disconnect();
-  }, []);
-
-  // Auto-expand textarea as user types, cap at 10 lines (240px), then scroll
+  // Auto-expand textarea as user types, cap at 10 lines (240px)
   const handleTextareaChange = (text: string) => {
     onChangeInput(text);
-    
+
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
       const newHeight = Math.min(textareaRef.current.scrollHeight, 240);
       textareaRef.current.style.height = newHeight + "px";
     }
-
-    // Synchronously measure input wrapper height after textarea resize so
-    // the scroll area padding updates in the same frame.
-    requestAnimationFrame(() => {
-      if (inputWrapperRef.current) {
-        setInputHeight(inputWrapperRef.current.offsetHeight);
-      }
-    });
   };
 
   const handleKeyDown = (_e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -565,7 +539,6 @@ export default function ChatCanvas({
       <div
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 sm:space-y-8 custom-scrollbar"
-        style={{ paddingBottom: inputHeight ? inputHeight + 16 : 128 }}
       >
         
         {messages.length === 0 ? (
@@ -1006,8 +979,8 @@ export default function ChatCanvas({
         </div>
       )}
 
-      {/* Floating Input text area layer - responsive */}
-      <div ref={inputWrapperRef} className="absolute bottom-0 left-0 w-full p-2 sm:p-4 bg-gradient-to-t from-[#0B0B0C] via-[#0B0B0C]/95 to-transparent select-none z-10">
+      {/* Input text area layer - flex child */}
+      <div className="shrink-0 w-full p-2 sm:p-4 bg-gradient-to-t from-[#0B0B0C] via-[#0B0B0C]/95 to-transparent select-none z-10">
         <div className="max-w-4xl mx-auto px-2 sm:px-0 relative group">
           <div className="absolute -inset-0.5 bg-emerald-500/10 rounded-lg sm:rounded-xl blur opacity-30 group-focus-within:opacity-100 transition duration-500 animate-pulse" />
           <div className="relative bg-[#0E0E11] border border-white/10 rounded-lg sm:rounded-xl p-2 sm:p-3 flex items-end gap-2 sm:gap-3 shadow-2xl">
@@ -1059,3 +1032,6 @@ export default function ChatCanvas({
     </main>
   );
 }
+
+// Export helper functions for use in mobile components
+export { MarkdownContent, getMessageContent, PermissionBubble, ChatCanvas };
