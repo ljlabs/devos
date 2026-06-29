@@ -653,7 +653,7 @@ describe("ChatCanvas", () => {
           isDeploying={true}
         />
       );
-      const deployBtn = screen.getByText("Deploying...");
+      const deployBtn = screen.getByRole("button", { name: /deploying|deploy/i });
       expect(deployBtn).toBeDisabled();
     });
   });

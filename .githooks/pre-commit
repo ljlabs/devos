@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -e
+
+# --- 1. Run tests ---
+echo "Running tests..."
+npm run test
+if [ $? -ne 0 ]; then
+  echo "❌ Tests failed. Commit aborted."
+  exit 1
+fi
+
+# --- 2. Check for .md files in project root ---
+echo "Checking for misplaced .md files in project root..."
+BAD_FILES=()
+for f in *.md; do
+  [ -f "$f" ] || continue
+  case "$f" in
+    CLAUDE.md|README.md) continue ;;
+    *) BAD_FILES+=("$f") ;;
+  esac
+done
+
+if [ ${#BAD_FILES[@]} -gt 0 ]; then
+  echo "❌ The following .md files must be moved to docs/ or documents/:"
+  for f in "${BAD_FILES[@]}"; do
+    echo "   $f"
+  done
+  exit 1
+fi
+
+echo "✅ All checks passed."
