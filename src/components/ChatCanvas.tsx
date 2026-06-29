@@ -427,6 +427,8 @@ export default function ChatCanvas({
   useEffect(() => {
     const wrapper = inputWrapperRef.current;
     if (!wrapper) return;
+    // Initial measurement
+    setInputHeight(wrapper.offsetHeight);
     const observer = new ResizeObserver(() => {
       setInputHeight(wrapper.offsetHeight);
     });
@@ -443,6 +445,14 @@ export default function ChatCanvas({
       const newHeight = Math.min(textareaRef.current.scrollHeight, 240);
       textareaRef.current.style.height = newHeight + "px";
     }
+
+    // Synchronously measure input wrapper height after textarea resize so
+    // the scroll area padding updates in the same frame.
+    requestAnimationFrame(() => {
+      if (inputWrapperRef.current) {
+        setInputHeight(inputWrapperRef.current.offsetHeight);
+      }
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
