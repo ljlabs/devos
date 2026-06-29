@@ -40,7 +40,7 @@ import { Message, Thread } from "../types";
 /** Renders markdown content with dark-theme styling for agent bubbles */
 function MarkdownContent({ content }: { content: string }) {
   return (
-    <div className="prose prose-invert prose-sm max-w-none
+    <div className="prose prose-invert prose-sm max-w-none break-words
       prose-headings:text-slate-200 prose-headings:font-semibold
       prose-p:text-slate-300 prose-p:leading-relaxed
       prose-a:text-emerald-400 prose-a:no-underline hover:prose-a:underline
@@ -695,7 +695,7 @@ export default function ChatCanvas({
                         disabled={!hasResult}
                       >
                         <div className="flex items-center gap-2 flex-1">
-                          <span className={`text-[10px] font-mono font-bold uppercase tracking-wider ${
+                          <span className={`text-[10px] font-mono font-bold uppercase tracking-wider break-all ${
                             isFailed ? "text-red-400" : "text-slate-400"
                           }`}>
                             {kind?.toUpperCase() || "TOOL"}: {title || "pending…"}
@@ -871,7 +871,7 @@ export default function ChatCanvas({
                     <div className="flex-1 max-w-[90%]">
                       <div className="border border-slate-500/20 rounded-lg overflow-hidden bg-black/40">
                         <div className="px-4 py-2 bg-[#0E0E11] border-b border-slate-500/10 select-none">
-                          <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                          <span className="text-[10px] font-mono font-bold uppercase tracking-wider break-all text-slate-400">
                             {kind?.toUpperCase() || "TOOL"}: {title || "pending…"}
                           </span>
                         </div>
