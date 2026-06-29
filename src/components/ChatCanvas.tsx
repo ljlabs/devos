@@ -246,8 +246,12 @@ function PermissionBubble({
     toolCall?.rawInput?.file_path ??
     toolCall?.rawInput?.path ??
     "";
+  // Prefer the ACP-provided tool name from metadata.
+  // For execute-kind tools (shell commands), always use "Bash" — never derive
+  // it from the command title, which would produce "cd" for "cd X && cat Y".
   const toolName: string | undefined =
     toolCall?._meta?.claudeCode?.toolName ??
+    (toolCall?.kind === "execute" ? "Bash" : undefined) ??
     (typeof toolCall?.title === "string" ? toolCall.title.split(/\s+/)[0] : undefined);
   const patternVariants = derivePatternVariants(command, toolCall?.kind, workspacePath);
 
@@ -399,11 +403,36 @@ export default function ChatCanvas({
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const inputWrapperRef = useRef<HTMLDivElement>(null);
+  const [inputHeight, setInputHeight] = useState(0);
 
-  // Auto-scroll to bottom of conversation
+  // Auto-scroll to bottom — only when user is already near the bottom,
+  // so scrolling up to read long responses is not disrupted.
+  const isNearBottom = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  };
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (isNearBottom()) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages]);
+
+  // Keep track of the input wrapper height so the scroll area can pad itself
+  // to the exact height of the floating input — preventing it from ever
+  // covering the last message or a permission bubble.
+  useEffect(() => {
+    const wrapper = inputWrapperRef.current;
+    if (!wrapper) return;
+    const observer = new ResizeObserver(() => {
+      setInputHeight(wrapper.offsetHeight);
+    });
+    observer.observe(wrapper);
+    return () => observer.disconnect();
+  }, []);
 
   // Auto-expand textarea as user types, cap at 10 lines (240px), then scroll
   const handleTextareaChange = (text: string) => {
@@ -526,7 +555,11 @@ export default function ChatCanvas({
       )}
 
       {/* Main chat conversation window */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 sm:space-y-8 custom-scrollbar pb-32 md:pb-40">
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 sm:space-y-8 custom-scrollbar"
+        style={{ paddingBottom: inputHeight ? inputHeight + 16 : 128 }}
+      >
         
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center space-y-4 max-w-md mx-auto py-12 select-none">
@@ -967,7 +1000,7 @@ export default function ChatCanvas({
       )}
 
       {/* Floating Input text area layer - responsive */}
-      <div className="absolute bottom-0 left-0 w-full p-2 sm:p-4 bg-gradient-to-t from-[#0B0B0C] via-[#0B0B0C]/95 to-transparent select-none z-10">
+      <div ref={inputWrapperRef} className="absolute bottom-0 left-0 w-full p-2 sm:p-4 bg-gradient-to-t from-[#0B0B0C] via-[#0B0B0C]/95 to-transparent select-none z-10">
         <div className="max-w-4xl mx-auto px-2 sm:px-0 relative group">
           <div className="absolute -inset-0.5 bg-emerald-500/10 rounded-lg sm:rounded-xl blur opacity-30 group-focus-within:opacity-100 transition duration-500 animate-pulse" />
           <div className="relative bg-[#0E0E11] border border-white/10 rounded-lg sm:rounded-xl p-2 sm:p-3 flex items-end gap-2 sm:gap-3 shadow-2xl">

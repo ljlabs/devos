@@ -125,6 +125,49 @@ describe("derivePatternVariants — file edits (kind=edit)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Compound shell commands (&&, |, ;)
+// ---------------------------------------------------------------------------
+describe("derivePatternVariants — compound shell commands", () => {
+  // Real-world input: a chained bash command across &&  and |
+  const COMMAND = "cd LekkerLoyal && cat functions/package.json 2>/dev/null | head -40";
+  const KIND    = "execute";   // kind passed through from the ACP toolCall
+  // toolName is resolved by the caller (PermissionBubble) to "Bash" for kind=execute,
+  // but derivePatternVariants only uses kind to choose file vs shell path.
+
+  it("produces exactly 3 variants: exact, scoped, and bare", () => {
+    const v = derivePatternVariants(COMMAND, KIND);
+    expect(v).toHaveLength(3);
+  });
+
+  it("first variant is always the exact command", () => {
+    const v = derivePatternVariants(COMMAND, KIND);
+    expect(v[0].pattern).toBe(COMMAND);
+    expect(v[0].label).toBe(COMMAND);
+  });
+
+  it("second variant is the scoped option — first-arg directory prefix per sub-command", () => {
+    const v = derivePatternVariants(COMMAND, KIND);
+    // cd LekkerLoyal  → prefix = LekkerLoyal  → "cd LekkerLoyal/*"
+    // cat functions/package.json → dir = functions → "cat functions/*"
+    // head -40        → firstArg starts with '-', falls through → "head *"
+    expect(v[1].label).toBe("cd LekkerLoyal/*, cat functions/*, head *");
+    expect(v[1].pattern).toBe("cd LekkerLoyal/* && cat functions/* && head *");
+  });
+
+  it("third variant is the bare option — any args to any of these commands", () => {
+    const v = derivePatternVariants(COMMAND, KIND);
+    expect(v[2].label).toBe("cd *, cat *, head *");
+    expect(v[2].pattern).toBe("cd * && cat * && head *");
+  });
+
+  it("never duplicates patterns", () => {
+    const v = derivePatternVariants(COMMAND, KIND);
+    const unique = new Set(v.map(x => x.pattern));
+    expect(unique.size).toBe(v.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Empty / edge cases
 // ---------------------------------------------------------------------------
 describe("derivePatternVariants — edge cases", () => {
