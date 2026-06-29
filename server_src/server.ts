@@ -106,6 +106,20 @@ function ensureWorkspace(workspaceId: string, name: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Map ACP tool kind to toolName for permission matching
+// ---------------------------------------------------------------------------
+
+function toolNameFromKind(kind: string | undefined): string | undefined {
+  switch (kind) {
+    case "execute": return "Bash";
+    case "write":   return "Write";
+    case "read":    return "Read";
+    case "edit":    return "Edit";
+    default:        return undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Wire an agent's raw ACP messages into the DB for a thread
 //
 // State tracking:
@@ -122,6 +136,19 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
   if (agent.listenerCount("message") > 0) return; // already wired
 
   agent.on("message", (raw: any) => {
+    // ------------------------------------------------------------------
+    // During session/load, the ACP subprocess may re-issue a
+    // session/request_permission that was pending when the session was
+    // saved. This arrives AFTER the session/load RPC response (and thus
+    // after suppressEmit is cleared), so it slips through as a live
+    // message. We must ignore it — it will be re-issued properly once
+    // the new session/prompt is sent.
+    // ------------------------------------------------------------------
+    if (agent.isLoadingSession && raw.method === "session/request_permission") {
+      logInfo("server", `[SKIP] session/request_permission suppressed during session load replay`, threadId);
+      return;
+    }
+
     logInfo("server", `ACP message received: ${raw.method ?? "response"}`, threadId);
     broadcastGlobalLog({ type: "acp", threadId, raw, timestamp: new Date().toISOString() });
 
@@ -137,13 +164,26 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
     if (raw.method === "session/request_permission") {
       const rawInput = raw.params?.toolCall?.rawInput ?? {};
       const toolCommand: string = rawInput.command ?? rawInput.file_path ?? rawInput.path ?? "";
+      
+      // Extract toolName from ACP metadata.
+      // Priority:
+      //   1. _meta.claudeCode.toolName (from session/update events)
+      //   2. tool kind mapping (from session/request_permission events)
+      // The toolCall kind field unambiguously maps to a tool type:
+      //   "execute" → Bash, "write" → Write, "edit" → Edit, "read" → Read
       const toolName: string | undefined =
         raw.params?.toolCall?._meta?.claudeCode?.toolName ??
         raw.params?._meta?.claudeCode?.toolName ??
-        (typeof raw.params?.toolCall?.title === "string"
-          ? raw.params.toolCall.title.split(/\s+/)[0]
-          : undefined);
+        toolNameFromKind(raw.params?.toolCall?.kind);
+      
       const patterns = readDb().allowedPatterns || [];
+
+      // Diagnostic logging
+      logInfo("server", 
+        `[PERM-CHECK] toolName="${toolName}" kind="${raw.params?.toolCall?.kind}" ` +
+        `command="${toolCommand.substring(0, 100)}..." patternCount=${patterns.length}`,
+        threadId
+      );
 
       if (toolCommand && checkAllowedPattern(toolCommand, toolName, patterns)) {
         logInfo("server", `[AUTO-APPROVE] Pattern matched: "${toolCommand}" (tool=${toolName ?? "unknown"})`, threadId);
@@ -551,6 +591,7 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
       // properly, and we must not send session/prompt.
       if (cancelPending.has(threadId)) {
         cancelPending.delete(threadId);
+        agent.markSessionReady(); // clear replay suppression before cancelling
         logInfo("server", `cancel was pending after initialize, aborting turn and cancelling sessionId=${sessionId}`, threadId);
         agent.cancel(sessionId);
         updateDb((db) => {
@@ -573,6 +614,9 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
 
       // Fire session/prompt via rpc() so we await the response and know
       // exactly when the agent turn is complete.
+      // Signal that session load replay is fully over — any messages from
+      // this point on are live (not replayed history or re-issued permissions).
+      agent.markSessionReady();
       logInfo("server", `sending session/prompt...`, threadId);
       await agent.rpc("session/prompt", {
         sessionId,
@@ -602,78 +646,29 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Helper: Generate pattern variants for "allow similar" behavior
-//
-// Given a full tool command, generate variants:
-// - "exact": Full command (specific parameters)
-// - "tool": Command with parameters wildcard ("python main.py *")
-// - "category": Command prefix only ("python.exe *")
-// ---------------------------------------------------------------------------
-
-function generatePatternVariants(fullCommand: string): Array<{ variant: string; pattern: string; createdAt: string }> {
-  // Extract the base tool path and script name
-  // Example: "C:/Users/.../python.exe C:/Users/.../main.py text \"temp\" --max 5"
-  // Variants:
-  // 1. exact: Full command (rarely reused due to specific parameters)
-  // 2. tool: "C:/Users/.../python.exe C:/Users/.../main.py *" (any args to this tool)
-  // 3. category: "C:/Users/.../python.exe *" (any python script in that directory)
-
-  const createdAt = new Date().toISOString();
-
-  // Try to identify tool parts
-  const parts = fullCommand.split(/\s+/);
-  
-  const variants: any[] = [];
-
-  // Always add "exact" variant
-  variants.push({
-    variant: "exact",
-    pattern: fullCommand,
-    createdAt,
-  });
-
-  // If command has multiple parts, add "tool" variant (script + wildcard)
-  if (parts.length >= 2) {
-    // Assume first two parts are executable and script
-    const toolPattern = `${parts[0]} ${parts[1]} *`;
-    if (toolPattern !== fullCommand) {
-      variants.push({
-        variant: "tool",
-        pattern: toolPattern,
-        createdAt,
-      });
-    }
-  }
-
-  // If command starts with a path (executable), add "category" variant
-  if (parts.length >= 1 && (parts[0].includes("/") || parts[0].includes("\\"))) {
-    const executablePattern = `${parts[0]} *`;
-    if (executablePattern !== fullCommand && !variants.some(v => v.pattern === executablePattern)) {
-      variants.push({
-        variant: "category",
-        pattern: executablePattern,
-        createdAt,
-      });
-    }
-  }
-
-  return variants;
-}
-
-// ---------------------------------------------------------------------------
 // Helper: Check if a command matches any stored pattern
 // ---------------------------------------------------------------------------
 
 /**
  * Check whether a single (non-compound) command matches any stored pattern.
  * Patterns are matched with forward-slash normalisation and simple * wildcards.
+ *
+ * Tool-scoping rules:
+ *   - Pattern has no toolName  → matches any tool (backward-compatible wildcard)
+ *   - Pattern has toolName AND incoming toolName matches → allow
+ *   - Pattern has toolName AND incoming toolName is DIFFERENT → skip (wrong tool)
+ *   - Pattern has toolName AND incoming toolName is UNDEFINED → skip (unknown tool
+ *     must not silently inherit a tool-scoped approval; fail safe)
  */
 function matchesSinglePattern(normCommand: string, toolName: string | undefined, patterns: any[]): boolean {
   for (const pattern of patterns) {
     const pat: string = (pattern.pattern || pattern);
 
-    // If the pattern has a toolName, it must match the incoming tool
-    if (pattern.toolName && toolName && pattern.toolName !== toolName) continue;
+    // Tool-scoped pattern: only match when the tool is known and matches
+    if (pattern.toolName) {
+      // If incoming toolName is unknown or mismatched, do not auto-approve
+      if (!toolName || pattern.toolName !== toolName) continue;
+    }
 
     const normPat = pat.replace(/\\/g, "/");
 
@@ -694,6 +689,34 @@ function matchesSinglePattern(normCommand: string, toolName: string | undefined,
 }
 
 /**
+ * Like matchesSinglePattern but ONLY performs exact (non-wildcard) matching.
+ * Used to check a full compound command against stored verbatim patterns before
+ * splitting it into sub-commands, so that a pattern like "cmd1 | cmd2" that was
+ * saved via "Always Allow" can match itself without being broken by the splitter.
+ * Wildcard patterns are intentionally skipped — "cd X *" must not short-circuit
+ * the compound split and bypass per-sub-command security checking.
+ */
+function matchesSinglePatternExact(normCommand: string, toolName: string | undefined, patterns: any[]): boolean {
+  for (const pattern of patterns) {
+    const pat: string = (pattern.pattern || pattern);
+
+    // Tool-scoped pattern: only match when the tool is known and matches
+    if (pattern.toolName) {
+      if (!toolName || pattern.toolName !== toolName) continue;
+    }
+
+    const normPat = pat.replace(/\\/g, "/");
+
+    // Only exact matches — skip wildcard patterns
+    if (normPat === "*" || normPat.endsWith("*")) continue;
+
+    if (normCommand === normPat) return true;
+  }
+
+  return false;
+}
+
+/**
  * Check if a command (possibly compound) is fully covered by stored allow patterns.
  *
  * For compound commands joined by &&, ||, |, or ;, the command is split into
@@ -707,6 +730,12 @@ function matchesSinglePattern(normCommand: string, toolName: string | undefined,
  * Operators inside quoted strings ("..." or '...') are ignored so that command
  * arguments containing | or ; (e.g. --body "line1 | line2") are not mistakenly
  * split into sub-commands.
+ *
+ * Exact-before-split: before splitting, we try a direct exact-match against all
+ * stored patterns. This handles the case where a user saved "allow_always" for a
+ * compound command verbatim (e.g. "gh issue view 9 | head -50") — the stored
+ * pattern IS the full compound string, so it must match itself exactly without
+ * being broken into sub-commands first.
  */
 function checkAllowedPattern(command: string, toolName: string | undefined, patterns: any[]): boolean {
   if (!patterns || patterns.length === 0) return false;
@@ -737,6 +766,18 @@ function checkAllowedPattern(command: string, toolName: string | undefined, patt
 
   if (!findUnquotedOperator(normCommand)) {
     return matchesSinglePattern(normCommand, toolName, patterns);
+  }
+
+  // The command contains an unquoted compound operator.
+  // FIRST: try an exact full-string match against stored non-wildcard patterns.
+  // This handles the case where a user saved "always allow" for a compound command
+  // verbatim (e.g. "gh issue view 9 | head -50" via the "Always Allow" ACP button).
+  // The stored pattern IS the full compound string, so it must match itself exactly
+  // without being broken into sub-commands.
+  // We only do exact-match here (not wildcard prefix) — a wildcard like "cd X *"
+  // must NOT short-circuit the split and bypass per-sub-command checking.
+  if (matchesSinglePatternExact(normCommand, toolName, patterns)) {
+    return true;
   }
 
   // Split on unquoted compound operators.

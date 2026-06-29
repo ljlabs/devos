@@ -68,17 +68,39 @@ function deriveFileVariants(filePath: string, workspacePath?: string): Array<{ l
   return variants;
 }
 
+/**
+ * Returns true if `s` contains a shell compound operator (&&, ||, |, ;) that
+ * is NOT inside a single- or double-quoted string.
+ *
+ * This is intentionally the same logic used in server.ts checkAllowedPattern so
+ * the UI's variant generation and the server's matching always agree on what
+ * counts as a "compound" command.
+ */
+function hasUnquotedOperator(s: string): boolean {
+  let inDouble = false;
+  let inSingle = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"' && !inSingle) { inDouble = !inDouble; continue; }
+    if (c === "'" && !inDouble) { inSingle = !inSingle; continue; }
+    if (inDouble || inSingle) continue;
+    if (c === "&" && s[i + 1] === "&") return true;
+    if (c === "|") return true; // covers | and ||
+    if (c === ";") return true;
+  }
+  return false;
+}
+
 function deriveShellVariants(command: string): Array<{ label: string; pattern: string }> {
   const variants: Array<{ label: string; pattern: string }> = [];
 
   // Exact command
   variants.push({ label: command, pattern: command });
 
-  // Detect compound commands (&&, ||, ;, |) and generate combined-pattern variants.
-  // We never add individual per-subcommand options — only two combined ones:
-  //   1. Scoped:  "cd LekkerLoyal/*, cat functions/*, head *"  (first arg as path prefix)
-  //   2. Bare:    "cd *, cat *, head *"                        (any args to any of these)
-  const isCompound = /&&|\|\|?|;/.test(command);
+  // Detect compound commands (&&, ||, ;, |) OUTSIDE of quoted strings.
+  // Using a quote-aware walker instead of a naive regex so that operators
+  // inside quoted arguments (e.g. --body "foo | bar") do NOT trigger this path.
+  const isCompound = hasUnquotedOperator(command);
   if (isCompound) {
     // Split on compound operators, preserving each sub-command
     const subCmds = command
