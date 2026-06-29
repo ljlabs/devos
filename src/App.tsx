@@ -465,6 +465,8 @@ export default function App() {
           onOpenNewThread={handleCreateThreadQuick}
           onRenameThread={handleRenameThread}
           onDeleteThread={handleDeleteThread}
+          onEditWorkspace={handleOpenEditWorkspace}
+          onDeleteWorkspace={handleDeleteWorkspace}
           onClose={() => setShowThreadListOnMobile(false)}
         />
       )}

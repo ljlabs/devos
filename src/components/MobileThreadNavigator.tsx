@@ -17,6 +17,8 @@ interface MobileThreadNavigatorProps {
   onOpenNewThread: () => void;
   onRenameThread: (id: string, title: string) => void;
   onDeleteThread: (id: string) => void;
+  onEditWorkspace: (id: string) => void;
+  onDeleteWorkspace: (id: string) => void;
   onClose: () => void;
 }
 
@@ -108,7 +110,7 @@ export default function MobileThreadNavigator({
                     {/* Workspace Item */}
                     <button
                       onClick={() => handleSelectWorkspace(workspace.id)}
-                      className={`w-full px-3 py-2 rounded-lg text-sm font-sans font-medium transition-colors flex items-center gap-2 select-none cursor-pointer ${
+                      className={`w-full px-3 py-2 rounded-lg text-sm font-sans font-medium transition-colors flex items-center gap-2 select-none cursor-pointer relative ${
                         isActive
                           ? "bg-emerald-500/20 border border-emerald-500/30 text-emerald-300"
                           : "text-slate-300 hover:bg-white/5"
@@ -131,6 +133,32 @@ export default function MobileThreadNavigator({
 
                       {/* Workspace Name - Truncate long names */}
                       <span className="flex-1 text-left truncate">{workspace.name}</span>
+
+                      {/* Action Buttons - Now visible on mobile */}
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onEditWorkspace(workspace.id);
+                          }}
+                          className="p-1 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 transition-colors"
+                          title="Edit workspace"
+                        >
+                          <Pencil size={12} />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm(`Delete workspace "${workspace.name}" and all its threads?`)) {
+                              onDeleteWorkspace(workspace.id);
+                            }
+                          }}
+                          className="p-1 rounded hover:bg-red-500/10 text-slate-500 hover:text-red-400 transition-colors"
+                          title="Delete workspace"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
                     </button>
 
                     {/* Threads - Nested under workspace */}
@@ -187,7 +215,7 @@ export default function MobileThreadNavigator({
                                     <span className="flex-1 text-left truncate">{thread.title}</span>
 
                                     {/* Edit & Delete Buttons - Show on hover */}
-                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+                                    <div className="transition-opacity flex items-center gap-1">
                                       <button
                                         onClick={(e) => {
                                           e.stopPropagation();

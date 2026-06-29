@@ -103,7 +103,7 @@ export default function WorkspaceSidebar({
                     )}
                   </button>
                   {!collapsed && (
-                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 transition-opacity">
                       <button
                         onClick={(e) => { e.stopPropagation(); onEditWorkspace(ws.id); }}
                         className="p-1 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 cursor-pointer"

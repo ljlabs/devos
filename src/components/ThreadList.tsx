@@ -123,7 +123,7 @@ export default function ThreadList({
                     </div>
 
                     {/* Action icons (visible on hover) */}
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex items-center gap-1 transition-opacity">
                       <button
                         onClick={(e) => { e.stopPropagation(); startEditing(thread); }}
                         className="p-1 rounded hover:bg-white/10 text-slate-500 hover:text-slate-300 cursor-pointer"
