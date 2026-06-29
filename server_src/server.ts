@@ -702,6 +702,10 @@ function matchesSinglePattern(normCommand: string, toolName: string | undefined,
  * This prevents a pattern like "cd LekkerLoyal *" from silently approving
  * "cd LekkerLoyal && gh issue create ..." because the second part (gh issue
  * create) is never in the allowed list.
+ *
+ * Operators inside quoted strings ("..." or '...') are ignored so that command
+ * arguments containing | or ; (e.g. --body "line1 | line2") are not mistakenly
+ * split into sub-commands.
  */
 function checkAllowedPattern(command: string, toolName: string | undefined, patterns: any[]): boolean {
   if (!patterns || patterns.length === 0) return false;
@@ -710,18 +714,66 @@ function checkAllowedPattern(command: string, toolName: string | undefined, patt
   // Normalise path separators once
   const normCommand = command.replace(/\\/g, "/");
 
-  // Detect compound commands
-  const isCompound = /&&|\|\|?|;/.test(normCommand);
+  // Detect compound operators OUTSIDE of quoted strings.
+  // Walk the string character by character, tracking whether we're inside
+  // a single- or double-quoted token.  Only flag the command as compound if
+  // we find &&, ||, | or ; while not inside quotes.
+  function findUnquotedOperator(s: string): boolean {
+    let inDouble = false;
+    let inSingle = false;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (c === '"' && !inSingle) { inDouble = !inDouble; continue; }
+      if (c === "'" && !inDouble) { inSingle = !inSingle; continue; }
+      if (inDouble || inSingle) continue;
+      // Outside quotes — check for operators
+      if (c === "&" && s[i + 1] === "&") return true;
+      if (c === "|") return true;  // covers both | and ||
+      if (c === ";") return true;
+    }
+    return false;
+  }
 
-  if (!isCompound) {
+  if (!findUnquotedOperator(normCommand)) {
     return matchesSinglePattern(normCommand, toolName, patterns);
   }
 
-  // Split on compound operators, preserving each sub-command
-  const subCommands = normCommand
-    .split(/\s*(?:&&|\|\|?|;)\s*/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // Split on unquoted compound operators.
+  // Walk again, emitting sub-command tokens between operators.
+  function splitOnUnquotedOperators(s: string): string[] {
+    const parts: string[] = [];
+    let inDouble = false;
+    let inSingle = false;
+    let start = 0;
+    let i = 0;
+    while (i < s.length) {
+      const c = s[i];
+      if (c === '"' && !inSingle) { inDouble = !inDouble; i++; continue; }
+      if (c === "'" && !inDouble) { inSingle = !inSingle; i++; continue; }
+      if (inDouble || inSingle) { i++; continue; }
+      // Check for && or ||
+      if ((c === "&" && s[i + 1] === "&") || (c === "|" && s[i + 1] === "|")) {
+        parts.push(s.slice(start, i).trim());
+        i += 2; // skip both chars
+        start = i;
+        continue;
+      }
+      // Single | or ;
+      if (c === "|" || c === ";") {
+        parts.push(s.slice(start, i).trim());
+        i++;
+        start = i;
+        continue;
+      }
+      i++;
+    }
+    // Remainder
+    const last = s.slice(start).trim();
+    if (last) parts.push(last);
+    return parts.filter(Boolean);
+  }
+
+  const subCommands = splitOnUnquotedOperators(normCommand);
 
   // Every sub-command must be independently allowed
   return subCommands.every((sub) => matchesSinglePattern(sub, toolName, patterns));

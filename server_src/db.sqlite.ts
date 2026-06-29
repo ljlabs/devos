@@ -91,7 +91,7 @@ export class SqliteDb {
       const threads = threadsRaw.map((row) => ({
         ...row,
         sessionId: row.sessionId || undefined,
-        pendingPermissionId: row.pendingPermissionId || undefined,
+        pendingPermissionId: row.pendingPermissionId != null ? row.pendingPermissionId : undefined,
         pendingPermissionOptions: row.pendingPermissionOptions ? JSON.parse(row.pendingPermissionOptions) : undefined,
         lastError: row.lastError || undefined,
       })) as Thread[];
@@ -147,7 +147,7 @@ export class SqliteDb {
             t.title,
             t.sessionId || null,
             t.status,
-            t.pendingPermissionId || null,
+            t.pendingPermissionId != null ? t.pendingPermissionId : null,
             t.pendingPermissionOptions ? JSON.stringify(t.pendingPermissionOptions) : null,
             t.lastError || null
           );

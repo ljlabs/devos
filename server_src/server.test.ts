@@ -465,3 +465,69 @@ describe("checkAllowedPattern — compound command security", () => {
     expect(checkAllowedPattern("gh issue create --title test", "Bash", realPatterns)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// checkAllowedPattern — quoted-string operator handling
+//
+// Operators (|, ;, &&) inside quoted arguments must NOT be treated as compound
+// command separators. This was the real bug: --body "## Goal\n- [ ] item"
+// contains | characters inside the markdown checklist, which caused the whole
+// gh issue create command to be split and fail to match "gh issue create *".
+// ---------------------------------------------------------------------------
+
+describe("checkAllowedPattern — operators inside quoted arguments", () => {
+  const ghIssuePattern = [
+    { pattern: "gh issue create *", variant: "execute", toolName: "Bash", createdAt: "2024-01-01" },
+  ];
+
+  it("auto-approves gh issue create with markdown checklist body (exact repro)", () => {
+    // The real command that was incorrectly blocked: the --body value contains
+    // "- [ ]" checklist items whose | characters were mistaken for pipe operators.
+    const cmd =
+      'gh issue create --title "Improve project professionalism and presentation" ' +
+      '--body "## Goal\nMake DevOS look more professional.\n\n## Areas\n- [ ] README\n- [ ] CONTRIBUTING\n- [ ] LICENSE" ' +
+      '--label enhancement';
+    expect(checkAllowedPattern(cmd, "Bash", ghIssuePattern)).toBe(true);
+  });
+
+  it("auto-approves when | appears inside a double-quoted argument", () => {
+    const patterns = [{ pattern: "gh issue create *", variant: "execute", createdAt: "2024-01-01" }];
+    const cmd = 'gh issue create --title "foo | bar" --body "baz"';
+    expect(checkAllowedPattern(cmd, undefined, patterns)).toBe(true);
+  });
+
+  it("auto-approves when ; appears inside a single-quoted argument", () => {
+    const patterns = [{ pattern: "echo *", variant: "execute", createdAt: "2024-01-01" }];
+    const cmd = "echo 'hello; world'";
+    expect(checkAllowedPattern(cmd, undefined, patterns)).toBe(true);
+  });
+
+  it("still splits on a real unquoted pipe (shell pipeline)", () => {
+    // "gh label list | head -10" — the | here IS a shell operator (unquoted)
+    const patterns = [
+      { pattern: "gh label list *", variant: "execute", createdAt: "2024-01-01" },
+      { pattern: "head *",          variant: "execute", createdAt: "2024-01-01" },
+    ];
+    const cmd = "gh label list --repo foo/bar | head -10";
+    // Both parts are covered → should approve
+    expect(checkAllowedPattern(cmd, undefined, patterns)).toBe(true);
+  });
+
+  it("blocks a real unquoted pipe when the second part has no pattern", () => {
+    const patterns = [
+      { pattern: "gh label list *", variant: "execute", createdAt: "2024-01-01" },
+      // no pattern for "grep"
+    ];
+    const cmd = "gh label list --repo foo/bar | grep coding";
+    expect(checkAllowedPattern(cmd, undefined, patterns)).toBe(false);
+  });
+
+  it("still blocks a genuine compound command that has an unmatched second part", () => {
+    const patterns = [
+      { pattern: "cd LekkerLoyal *", variant: "execute", createdAt: "2024-01-01" },
+    ];
+    const cmd = "cd LekkerLoyal && gh issue create --title test";
+    expect(checkAllowedPattern(cmd, undefined, patterns)).toBe(false);
+  });
+});
+
