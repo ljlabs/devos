@@ -9,7 +9,7 @@ import os from "os";
 
 // Use an isolated DB file and test mode BEFORE importing the server so the
 // module-level constants pick these up and the HTTP listener/Vite never boot.
-const TEST_DB = path.join(os.tmpdir(), `devos-server-test-${Date.now()}.json`);
+const TEST_DB = path.join(os.tmpdir(), `devos-server-test-${Date.now()}.db`);
 process.env.NODE_ENV = "test";
 process.env.DB_FILE = TEST_DB;
 
@@ -17,10 +17,15 @@ process.env.DB_FILE = TEST_DB;
 const VALID_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "devos-valid-ws-"));
 
 // Import AFTER env vars are set.
-const { app } = await import("./server");
+const { app, sqliteDb } = await import("./server");
 
 function seedDb(data: any) {
-  fs.writeFileSync(TEST_DB, JSON.stringify(data, null, 2));
+  // For SQLite, we use the writeDb API instead of writing JSON
+  sqliteDb.writeDb(data);
+}
+
+function readDb() {
+  return sqliteDb.readDb();
 }
 
 describe("POST /api/workspaces — path validation (integration)", () => {
@@ -30,7 +35,18 @@ describe("POST /api/workspaces — path validation (integration)", () => {
   });
 
   afterAll(() => {
-    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+    // Don't close the database yet - let the final teardown handle it
+    // Just clean up the temp files
+    for (let i = 0; i < 10; i++) {
+      try {
+        if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+        if (fs.existsSync(TEST_DB + "-shm")) fs.unlinkSync(TEST_DB + "-shm");
+        if (fs.existsSync(TEST_DB + "-wal")) fs.unlinkSync(TEST_DB + "-wal");
+        break;
+      } catch {
+        // Retry
+      }
+    }
     if (fs.existsSync(VALID_DIR)) fs.rmSync(VALID_DIR, { recursive: true, force: true });
   });
 
@@ -52,7 +68,7 @@ describe("POST /api/workspaces — path validation (integration)", () => {
       .post("/api/workspaces")
       .send({ name: "persisted", path: VALID_DIR });
 
-    const db = JSON.parse(fs.readFileSync(TEST_DB, "utf-8"));
+    const db = readDb();
     expect(db.workspaces).toHaveLength(1);
     expect(db.workspaces[0].path).toBe(VALID_DIR);
   });
@@ -133,7 +149,7 @@ describe("POST /api/workspaces — path validation (integration)", () => {
       .post("/api/workspaces")
       .send({ name: "broken paths 1", path: "/paths/broken path" });
 
-    const db = JSON.parse(fs.readFileSync(TEST_DB, "utf-8"));
+    const db = readDb();
     expect(db.workspaces).toHaveLength(0);
   });
 
@@ -159,7 +175,18 @@ describe("Allowed Patterns — path normalization & tool scoping (integration)",
   });
 
   afterAll(() => {
-    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+    // Don't close the database yet - let the final teardown handle it
+    // Just clean up the temp files
+    for (let i = 0; i < 10; i++) {
+      try {
+        if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+        if (fs.existsSync(TEST_DB + "-shm")) fs.unlinkSync(TEST_DB + "-shm");
+        if (fs.existsSync(TEST_DB + "-wal")) fs.unlinkSync(TEST_DB + "-wal");
+        break;
+      } catch {
+        // Retry
+      }
+    }
   });
 
   // ── Path normalization — backslash vs forward-slash ──────────────────────
@@ -259,7 +286,7 @@ describe("Allowed Patterns — path normalization & tool scoping (integration)",
       expect(saveRes.status).toBe(201);
 
       // Verify it's in the DB
-      const db = JSON.parse(fs.readFileSync(TEST_DB, "utf-8"));
+      const db = readDb();
       const editPattern = db.allowedPatterns.find(
         (p: any) => p.pattern === "C:/Users/jorda/Documents/workspace/pipelines/*" && p.toolName === "Edit"
       );
@@ -298,7 +325,7 @@ describe("Allowed Patterns — path normalization & tool scoping (integration)",
           variant: "execute",
         });
 
-      const db = JSON.parse(fs.readFileSync(TEST_DB, "utf-8"));
+      const db = readDb();
       const bashPattern = db.allowedPatterns[0];
 
       // Simulate an Edit request for a file in the same workspace
@@ -321,7 +348,7 @@ describe("Allowed Patterns — path normalization & tool scoping (integration)",
         ],
       });
 
-      const db = JSON.parse(fs.readFileSync(TEST_DB, "utf-8"));
+      const db = readDb();
       const oldPattern = db.allowedPatterns[0];
 
       // An Edit request should match because the pattern has no toolName restriction
@@ -338,7 +365,7 @@ describe("Allowed Patterns — path normalization & tool scoping (integration)",
           variant: "edit",
         });
 
-      const db = JSON.parse(fs.readFileSync(TEST_DB, "utf-8"));
+      const db = readDb();
       const exactPattern = db.allowedPatterns[0];
       const prefix = exactPattern.pattern;
 
@@ -356,9 +383,10 @@ describe("Allowed Patterns — path normalization & tool scoping (integration)",
         .post("/api/allowedPatterns")
         .send({ pattern: "*", toolName: "Write", variant: "write" });
 
-      const db = JSON.parse(fs.readFileSync(TEST_DB, "utf-8"));
+      const db = readDb();
       expect(db.allowedPatterns[0].pattern).toBe("*");
       // "*" matches everything — the checkAllowedPattern function returns true for "*"
     });
   });
 });
+

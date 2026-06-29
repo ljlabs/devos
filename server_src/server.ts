@@ -22,62 +22,51 @@ import dotenv from "dotenv";
 import { ClaudeAgent } from "./claudeAgent";
 import { DatabaseSchema, Workspace, Thread, Message } from "../src/types";
 import { logInfo, logError, getLogs } from "../src/logger";
+import { SqliteDb } from "./db.sqlite";
 
 dotenv.config();
 
 const app = express();
 const PORT = parseInt(process.env.PORT || "3000", 10);
-const DB_FILE = process.env.DB_FILE || path.join(process.cwd(), "db.json");
+const DB_FILE = process.env.DB_FILE || path.join(process.cwd(), "devos.db");
 const WORKSPACES_DIR = path.join(process.cwd(), "sandbox_workspaces");
 
 app.use(express.json());
 
 // ---------------------------------------------------------------------------
-// DB helpers
+// SQLite DB instance
 // ---------------------------------------------------------------------------
 
-const defaultDb: DatabaseSchema = {
-  workspaces: [
-    { id: "ws-auth", name: "frontend-auth", path: path.join(WORKSPACES_DIR, "ws-auth") },
-    { id: "ws-api",  name: "api-gateway",   path: path.join(WORKSPACES_DIR, "ws-api") },
-    { id: "ws-docs", name: "docs-site",      path: path.join(WORKSPACES_DIR, "ws-docs") },
-  ],
-  threads: [],
-  messages: [],
-  allowedPatterns: [],
-};
+const sqliteDb = new SqliteDb(DB_FILE);
+
+// Initialize with default workspaces if empty
+{
+  const db = sqliteDb.readDb();
+  if (db.workspaces.length === 0) {
+    const defaultWorkspaces: Workspace[] = [
+      { id: "ws-auth", name: "frontend-auth", path: path.join(WORKSPACES_DIR, "ws-auth") },
+      { id: "ws-api",  name: "api-gateway",   path: path.join(WORKSPACES_DIR, "ws-api") },
+      { id: "ws-docs", name: "docs-site",      path: path.join(WORKSPACES_DIR, "ws-docs") },
+    ];
+    db.workspaces = defaultWorkspaces;
+    sqliteDb.writeDb(db);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DB helpers (wrapping SQLiteDb for consistency with existing code)
+// ---------------------------------------------------------------------------
 
 function readDb(): DatabaseSchema {
-  try {
-    if (!fs.existsSync(DB_FILE)) {
-      fs.writeFileSync(DB_FILE, JSON.stringify(defaultDb, null, 2));
-      return defaultDb;
-    }
-    const data = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
-    // Ensure allowedPatterns exists (for backward compatibility)
-    if (!data.allowedPatterns) {
-      data.allowedPatterns = [];
-    }
-    return data;
-  } catch {
-    return defaultDb;
-  }
+  return sqliteDb.readDb();
 }
 
 function writeDb(data: DatabaseSchema): boolean {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-    return true;
-  } catch (err: any) {
-    console.error("[db] writeDb failed:", err.message);
-    return false;
-  }
+  return sqliteDb.writeDb(data);
 }
 
 function updateDb(fn: (db: DatabaseSchema) => void): void {
-  const db = readDb();
-  fn(db);
-  writeDb(db);
+  sqliteDb.updateDb(fn);
 }
 
 function newId(prefix: string): string {
@@ -442,11 +431,12 @@ app.delete("/api/threads/:threadId", (req, res) => {
   const thread = db.threads.find((t) => t.id === threadId);
   if (!thread) return res.status(404).json({ error: "not found" });
 
-  db.threads = db.threads.filter((t) => t.id !== threadId);
-  db.messages = db.messages.filter((m) => m.threadId !== threadId);
-  writeDb(db);
-
   ClaudeAgent.removeInstance(threadId);
+  
+  // Use cascade delete from SQLiteDb
+  const deleted = sqliteDb.deleteThread(threadId);
+  if (!deleted) return res.status(500).json({ error: "delete failed" });
+
   res.json({ ok: true });
 });
 
@@ -459,10 +449,9 @@ app.delete("/api/workspaces/:workspaceId", (req, res) => {
   const threadIds = db.threads.filter((t) => t.workspaceId === workspaceId).map((t) => t.id);
   threadIds.forEach((id) => ClaudeAgent.removeInstance(id));
 
-  db.threads = db.threads.filter((t) => t.workspaceId !== workspaceId);
-  db.messages = db.messages.filter((m) => !threadIds.includes(m.threadId));
-  db.workspaces.splice(wsIndex, 1);
-  writeDb(db);
+  // Use cascade delete from SQLiteDb (deletes workspace + threads + messages)
+  const deleted = sqliteDb.deleteWorkspace(workspaceId);
+  if (!deleted) return res.status(500).json({ error: "delete failed" });
 
   res.json({ ok: true });
 });
@@ -986,4 +975,4 @@ if (process.env.NODE_ENV !== "test") {
   startServer();
 }
 
-export { app };
+export { app, sqliteDb };

@@ -14,6 +14,14 @@ A modern, open-source development environment for building and iterating with AI
 - **Real-time status tracking** – Monitor agent state across `idle`, `thinking`, and `awaiting_permission`
 - **Built-in REST API** – Full control via HTTP for integration with your own tools
 
+## Database
+
+**SQLite** (auto-created as `devos.db`)
+
+From JSON? Run: `npx tsx scripts/migrate-db.ts`
+
+See **[docs/SQLITE_REFERENCE.md](./docs/SQLITE_REFERENCE.md)** for schema, testing, and troubleshooting.
+
 ## Architecture
 
 DevOS is built on a **thin HTTP router** philosophy:
@@ -107,25 +115,34 @@ npm test:watch       # Run tests in watch mode
 ```
 devos/
 ├── server_src/
-│   ├── server.ts           # Express HTTP router
-│   ├── claudeAgent.ts      # ACP subprocess wrapper
-│   └── claudeAgent.test.ts # Permission strategy tests
+│   ├── server.ts              # Express router
+│   ├── db.sqlite.ts           # SQLite layer
+│   ├── claudeAgent.ts         # ACP wrapper
+│   └── *.test.ts              # Tests (72 total)
 ├── src/
-│   ├── components/         # React UI components
-│   ├── types.ts           # Shared TypeScript types
-│   ├── logger.ts          # Structured logging
-│   └── App.tsx            # Main React app
+│   ├── components/            # React UI
+│   ├── types.ts              # Shared types
+│   └── App.tsx               # Main app
 ├── docs/
-│   ├── ACP_ARCHITECTURE.md      # Core design docs
-│   ├── ARCHITECTURE_DIAGRAMS.md # Visual diagrams
-│   ├── UI_RENDERING_GUIDE.md    # UI implementation guide
-│   └── QUICK_REFERENCE.md       # API reference
-├── vite.config.ts         # Vite configuration
-├── vitest.config.ts       # Test runner config
-├── tsconfig.json          # TypeScript config
-├── db.json               # Raw ACP message database
-└── package.json          # Dependencies
+│   ├── ACP_ARCHITECTURE.md
+│   ├── SQLITE_REFERENCE.md
+│   ├── QUICK_REFERENCE.md
+│   └── UI_RENDERING_GUIDE.md
+├── scripts/
+│   └── migrate-db.ts         # JSON→SQLite
+├── devos.db                  # Database (auto-created)
+└── package.json
 ```
+
+## Testing
+
+```bash
+npm run test              # All tests (72 passing)
+npm run test:watch       # Watch mode
+npm run test -- server_src  # Server + DB tests
+```
+
+Tests include database layer, API endpoints, and cascade deletion scenarios.
 
 ## Documentation
 

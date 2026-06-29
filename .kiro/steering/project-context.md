@@ -2,27 +2,42 @@
 
 ## Architecture Reference
 
-Before making changes, consult the architecture documentation in `docs/`:
+Core documentation in `docs/`:
+- `ACP_ARCHITECTURE.md` — ACP protocol design and data flow
+- `SQLITE_REFERENCE.md` — Database schema, migration, testing
+- `QUICK_REFERENCE.md` — API routes and debugging
+- `UI_RENDERING_GUIDE.md` — Raw ACP messages to UI rendering
 
-- `docs/ACP_ARCHITECTURE.md` — Core ACP protocol design, data flow, and message types
-- `docs/ARCHITECTURE_DIAGRAMS.md` — Visual diagrams of the system, permission flow, and state transitions
-- `docs/UI_RENDERING_GUIDE.md` — How raw ACP messages are parsed and rendered as chat bubbles
-- `docs/QUICK_REFERENCE.md` — Quick lookup for API routes, data structures, and debugging
+## Key Components
+
+**Server** (`server_src/`):
+- `server.ts` - Express router + request handling
+- `db.sqlite.ts` - SQLite persistence layer (24 tests)
+- `claudeAgent.ts` - ACP subprocess wrapper
+
+**Database**:
+- Auto-created as `devos.db` (SQLite)
+- 4 tables: workspaces, threads, messages, allowedPatterns
+- Cascade deletion on workspace/thread delete
+- ~5-10x faster than JSON
+
+**UI** (`src/`):
+- React components in `/components`
+- Chat canvas renders ACP messages
+- Workspace/thread sidebar navigation
 
 ## Rules
 
-- Do not create markdown documentation files (*.md) unless explicitly asked by the user.
-
-## Key Design Principles
-
-- The server is a **thin HTTP router** — it stores raw ACP messages verbatim, never interprets or transforms them
-- All conversation state flows through the ACP protocol (JSON-RPC 2.0 over stdin/stdout)
-- The UI (`ChatCanvas.tsx`) parses raw ACP structures directly via `getMessageContent()`
-- Permission flow: ACP sends `session/request_permission` → UI renders dynamic buttons → user picks → server sends JSON-RPC response
-- `db.json` stores only raw ACP messages, workspace/thread metadata, and pending permission state
+- Keep code comments clear and concise
+- Documentation in `docs/` directory only (see `documentation-standards.md`)
+- Tests cover database layer, API endpoints, cascade deletion
+- Run `npm run test` before committing
 
 ## Commands
 
-- `npm run dev` — Start dev server (Express + Vite, port configured in `.env`)
-- `npm run build` — Production build (vite build + esbuild server.cjs)
-- `npm run lint` — Type-check with `tsc --noEmit`
+```bash
+npm run dev      # Dev server (port 3000, Vite hot-reload)
+npm run build    # Production build
+npm run lint     # Type-check
+npm run test     # Run 72 tests
+```
