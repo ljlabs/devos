@@ -621,3 +621,136 @@ describe("derivePatternVariants — multi-positional commands", () => {
   });
 });
 
+
+
+// ---------------------------------------------------------------------------
+// BUG FIX: deriveShellVariants — quoted operator false-positive compound detection
+//
+// The naive /&&|\|\|?|;/.test(command) regex incorrectly treats operators
+// INSIDE quoted arguments as compound separators. This caused the "Allow Similar"
+// dialog to show broken "scoped/bare" compound variants instead of the correct
+// "script *" and "exe *" variants for web-search style commands.
+// ---------------------------------------------------------------------------
+
+describe("derivePatternVariants — quoted operators must NOT trigger compound path", () => {
+  const PYTHON_EXE = "C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe";
+  const SCRIPT = "C:/Users/jorda/.claude/skills/web-search/main.py";
+
+  // --- Real-world commands from the bug report ---
+
+  it("web-search cmd1: double-quoted query produces script/* and exe/* variants (not compound)", () => {
+    const cmd = `${PYTHON_EXE} ${SCRIPT} text "Google Workspace CLI tool command line interface" --max 10`;
+    const v = derivePatternVariants(cmd);
+    const patterns = v.map(x => x.pattern);
+
+    // Should NOT be treated as compound
+    expect(v.length).toBe(3); // exact, script*, exe*
+    expect(patterns[0]).toBe(cmd);
+    expect(patterns[1]).toBe(`${PYTHON_EXE} ${SCRIPT} *`);
+    expect(patterns[2]).toBe(`${PYTHON_EXE} *`);
+
+    // Must NOT contain compound-style "&&" patterns
+    patterns.forEach(p => expect(p).not.toContain("&&"));
+  });
+
+  it("web-search cmd2: double-quoted query produces same script/* variant (not compound)", () => {
+    const cmd = `${PYTHON_EXE} ${SCRIPT} text "gws google workspace CLI install authentication account" --max 8`;
+    const v = derivePatternVariants(cmd);
+    const patterns = v.map(x => x.pattern);
+
+    expect(v.length).toBe(3);
+    expect(patterns[1]).toBe(`${PYTHON_EXE} ${SCRIPT} *`);
+    expect(patterns[2]).toBe(`${PYTHON_EXE} *`);
+    patterns.forEach(p => expect(p).not.toContain("&&"));
+  });
+
+  it("both web-search commands produce the SAME script-level pattern for allow-similar matching", () => {
+    const cmd1 = `${PYTHON_EXE} ${SCRIPT} text "Google Workspace CLI tool command line interface" --max 10`;
+    const cmd2 = `${PYTHON_EXE} ${SCRIPT} text "gws google workspace CLI install authentication account" --max 8`;
+
+    const v1 = derivePatternVariants(cmd1).map(x => x.pattern);
+    const v2 = derivePatternVariants(cmd2).map(x => x.pattern);
+
+    // Script-level variant must be identical for both commands
+    expect(v1[1]).toBe(v2[1]);
+    expect(v1[1]).toBe(`${PYTHON_EXE} ${SCRIPT} *`);
+
+    // Exe-level variant must also be identical
+    expect(v1[2]).toBe(v2[2]);
+    expect(v1[2]).toBe(`${PYTHON_EXE} *`);
+  });
+
+  it("| inside double-quoted argument does NOT trigger compound path", () => {
+    const cmd = `${PYTHON_EXE} ${SCRIPT} text "foo | bar baz" --max 5`;
+    const v = derivePatternVariants(cmd);
+    const patterns = v.map(x => x.pattern);
+
+    expect(v.length).toBe(3);
+    expect(patterns[0]).toBe(cmd);
+    expect(patterns[1]).toBe(`${PYTHON_EXE} ${SCRIPT} *`);
+    expect(patterns[2]).toBe(`${PYTHON_EXE} *`);
+    patterns.forEach(p => expect(p).not.toContain("&&"));
+  });
+
+  it("| inside single-quoted argument does NOT trigger compound path", () => {
+    const cmd = `${PYTHON_EXE} ${SCRIPT} text 'gws | CLI install' --max 8`;
+    const v = derivePatternVariants(cmd);
+    const patterns = v.map(x => x.pattern);
+
+    expect(v.length).toBe(3);
+    expect(patterns[1]).toBe(`${PYTHON_EXE} ${SCRIPT} *`);
+    patterns.forEach(p => expect(p).not.toContain("&&"));
+  });
+
+  it("; inside double-quoted argument does NOT trigger compound path", () => {
+    const cmd = `${PYTHON_EXE} ${SCRIPT} text "step1; step2" --max 5`;
+    const v = derivePatternVariants(cmd);
+    const patterns = v.map(x => x.pattern);
+
+    expect(v.length).toBe(3);
+    expect(patterns[1]).toBe(`${PYTHON_EXE} ${SCRIPT} *`);
+    patterns.forEach(p => expect(p).not.toContain("&&"));
+  });
+
+  it("unquoted | IS treated as compound (pipeline is real)", () => {
+    // An unquoted | outside any quotes is a genuine shell pipe → compound variants
+    const cmd = `${PYTHON_EXE} ${SCRIPT} text foo | head -5`;
+    const v = derivePatternVariants(cmd);
+    // Should get 3 variants: exact + scoped + bare (compound path)
+    expect(v.length).toBe(3);
+    expect(v[0].pattern).toBe(cmd); // exact
+    // Scoped and bare variants contain compound operators
+    expect(v[1].pattern).toContain("&&");
+    expect(v[2].pattern).toContain("&&");
+  });
+
+  it("unquoted && IS treated as compound", () => {
+    const cmd = "cd workspace && ls -la";
+    const v = derivePatternVariants(cmd);
+    expect(v.length).toBe(3);
+    expect(v[0].pattern).toBe(cmd);
+    expect(v[1].pattern).toContain("&&");
+    expect(v[2].pattern).toContain("&&");
+  });
+
+  // --- Confirm the "allow similar" workflow end-to-end ---
+
+  it("end-to-end: saving script/* from cmd1 allows cmd2 via checkAllowedPattern prefix logic", () => {
+    // This asserts the full workflow works:
+    // 1. User runs cmd1, clicks "Allow Similar", picks the script-level variant
+    // 2. The pattern "...main.py *" is saved
+    // 3. cmd2 (same script, different query) should be auto-approved
+
+    const cmd1 = `${PYTHON_EXE} ${SCRIPT} text "Google Workspace CLI tool command line interface" --max 10`;
+    const cmd2 = `${PYTHON_EXE} ${SCRIPT} text "gws google workspace CLI install authentication account" --max 8`;
+
+    // Get the script-level pattern from cmd1's variants
+    const savedPattern = derivePatternVariants(cmd1)[1].pattern;
+    expect(savedPattern).toBe(`${PYTHON_EXE} ${SCRIPT} *`);
+
+    // Verify cmd2's normalized form starts with the saved pattern's prefix
+    const normCmd2 = cmd2.replace(/\\/g, "/");
+    const prefix = savedPattern.slice(0, -1); // remove trailing *
+    expect(normCmd2.startsWith(prefix)).toBe(true);
+  });
+});

@@ -261,18 +261,27 @@ function PermissionBubble({
     onRespond(optionId, optionId === "allow_always" ? command : undefined, toolName);
   }
 
-  function handleConfirmSimilar() {
+  async function handleConfirmSimilar() {
     if (!selectedPattern) return;
-    // Save the chosen pattern scoped to this tool
-    fetch("/api/allowedPatterns", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        pattern: selectedPattern,
-        toolName,
-        variant: toolCall?.kind ?? "wildcard",
-      }),
-    }).catch(console.error);
+    // Save the pattern BEFORE unblocking the agent. The agent may immediately
+    // retry the same tool after allow_once — the pattern must already be in
+    // the DB when that next session/request_permission arrives, or it won't
+    // be auto-approved and the user gets a duplicate prompt.
+    try {
+      await fetch("/api/allowedPatterns", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pattern: selectedPattern,
+          toolName,
+          variant: toolCall?.kind ?? "wildcard",
+        }),
+      });
+    } catch (err) {
+      console.error("Failed to save allow-similar pattern:", err);
+      // Still unblock the agent even if the save failed — better to proceed
+      // than to leave the agent permanently blocked.
+    }
     // Use the allow-once optionId from ACP's actual options list — never hardcode
     const allowOnceOption = options.find((o) => o.kind === "allow_once");
     onRespond(allowOnceOption?.optionId ?? "allow");

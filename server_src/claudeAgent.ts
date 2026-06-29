@@ -247,6 +247,14 @@ export class ClaudeAgent extends EventEmitter {
   //   - no sessionId        → first message on this thread; create a new session.
   // ---------------------------------------------------------------------------
 
+  /** True while session/load is in progress — used by wireAgent to skip replayed messages */
+  isLoadingSession = false;
+
+  /** Signal that session load is fully complete and the agent is ready for live messages */
+  markSessionReady(): void {
+    this.isLoadingSession = false;
+  }
+
   async initialize(sessionId?: string): Promise<string> {
     logInfo("acp", `initialize() called, sessionId=${sessionId ?? "none"}, proc=${this.proc ? "alive" : "null"}, initialized=${this.initialized}`, this.threadId);
     if (!this.proc) this.spawnProcess();
@@ -269,6 +277,7 @@ export class ClaudeAgent extends EventEmitter {
       // we've already persisted. Re-emitting them would create duplicates in DB.
       logInfo("acp", `sending "session/load" RPC with sessionId=${sessionId}...`, this.threadId);
       this.suppressEmit = true;
+      this.isLoadingSession = true;
       try {
         await this.rpc("session/load", {
           sessionId,
@@ -277,6 +286,9 @@ export class ClaudeAgent extends EventEmitter {
         });
       } finally {
         this.suppressEmit = false;
+        // Keep isLoadingSession=true until markSessionReady() is called just
+        // before session/prompt — this suppresses any permission re-requests
+        // that ACP fires after session/load but before the new prompt.
       }
       logInfo("acp", "session loaded OK", this.threadId);
       return sessionId;
