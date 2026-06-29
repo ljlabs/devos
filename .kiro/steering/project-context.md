@@ -33,6 +33,19 @@ Core documentation in `docs/`:
 - Tests cover database layer, API endpoints, cascade deletion
 - Run `npm run test` before committing
 
+## Test Locations
+
+Tests live co-located with their source file. Do not create duplicate test files in `test/unit/` for the same module.
+
+| Subject | Test file |
+|---|---|
+| `derivePatternVariants` (allow-similar pattern UI) | `src/utils/patterns.test.ts` |
+| `checkAllowedPattern` (server auto-approve logic) | `server_src/server.test.ts` |
+| SQLite database layer | `server_src/db.sqlite.test.ts` |
+| API integration | `server_src/server.test.ts` |
+
+**Rule**: if a test for `src/utils/patterns.ts` or `server_src/server.ts` already exists in its co-located file, add new cases there — never create a parallel file in `test/unit/` for the same module.
+
 ## Commands
 
 ```bash

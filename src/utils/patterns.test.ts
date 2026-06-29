@@ -5,6 +5,347 @@ import { describe, it, expect } from "vitest";
 import { derivePatternVariants } from "./patterns";
 
 // ---------------------------------------------------------------------------
+// Shell command variants — simple (non-compound)
+// ---------------------------------------------------------------------------
+describe("derivePatternVariants — shell commands", () => {
+  it("returns only exact variant for a single-word command with no spaces", () => {
+    const v = derivePatternVariants("git");
+    expect(v).toHaveLength(1);
+    expect(v[0].pattern).toBe("git");
+  });
+
+  it("returns only exact variant for a bare exe with path separators and no args", () => {
+    const v = derivePatternVariants("C:/Users/jorda/python.exe");
+    expect(v).toHaveLength(1);
+    expect(v[0].pattern).toBe("C:/Users/jorda/python.exe");
+  });
+
+  it("returns exact + script + exe variants for a full python invocation", () => {
+    const cmd = "C:/Python/python.exe C:/scripts/main.py arg1 arg2";
+    const v = derivePatternVariants(cmd);
+    const patterns = v.map(x => x.pattern);
+    expect(patterns).toContain(cmd);
+    expect(patterns).toContain("C:/Python/python.exe C:/scripts/main.py *");
+    expect(patterns).toContain("C:/Python/python.exe *");
+  });
+
+  it("never duplicates patterns", () => {
+    const cmd = "npm install lodash";
+    const v = derivePatternVariants(cmd);
+    const unique = new Set(v.map(x => x.pattern));
+    expect(unique.size).toBe(v.length);
+  });
+
+  it("heuristic: single-word command with extension treated as shell (exact only)", () => {
+    // Without kind=edit, a bare filename is a single-word shell command — no wildcard
+    const v = derivePatternVariants("hello.md");
+    expect(v).toHaveLength(1);
+    expect(v[0].pattern).toBe("hello.md");
+  });
+
+  // ── Label behaviour ───────────────────────────────────────────────────────
+
+  it("label for script-level variant is the full pattern (not basename)", () => {
+    const cmd = "C:/Users/jorda/python.exe C:/Users/jorda/main.py arg1 arg2";
+    const v = derivePatternVariants(cmd);
+    const scriptVariant = v.find(x => x.pattern === "C:/Users/jorda/python.exe C:/Users/jorda/main.py *");
+    expect(scriptVariant).toBeDefined();
+    expect(scriptVariant!.label).toBe("C:/Users/jorda/python.exe C:/Users/jorda/main.py *");
+  });
+
+  it("label for exe-level variant uses basename only", () => {
+    const cmd = "C:/Users/jorda/python.exe C:/Users/jorda/main.py";
+    const v = derivePatternVariants(cmd);
+    const exeVariant = v.find(x => x.pattern === "C:/Users/jorda/python.exe *");
+    expect(exeVariant).toBeDefined();
+    expect(exeVariant!.label).toBe("python.exe *");
+  });
+
+  it("generates non-empty labels for all variants", () => {
+    const cmd = "C:/Users/jorda/python.exe C:/Users/jorda/main.py arg";
+    derivePatternVariants(cmd).forEach(v => {
+      expect(v.label).toBeTruthy();
+      expect(v.label.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ── Path separator handling ───────────────────────────────────────────────
+
+  it("preserves full paths in patterns — not basenames", () => {
+    const cmd = "C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe C:/Users/jorda/.claude/skills/web-search/main.py --arg value";
+    const v = derivePatternVariants(cmd);
+    expect(v.length).toBeGreaterThanOrEqual(3);
+    expect(v[0].pattern).toBe(cmd);
+    expect(v[0].label).toBe(cmd);
+    expect(v[1].pattern).toBe(
+      "C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe C:/Users/jorda/.claude/skills/web-search/main.py *"
+    );
+    expect(v[2].pattern).toBe("C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe *");
+    expect(v[2].label).toBe("python.exe *");
+  });
+
+  it("handles Windows-style backslash paths", () => {
+    const cmd = "C:\\Users\\jorda\\python.exe C:\\Users\\jorda\\main.py";
+    const v = derivePatternVariants(cmd);
+    expect(v.length).toBeGreaterThanOrEqual(2);
+    expect(v[0].pattern).toBe(cmd);
+    expect(v[1].pattern).toBe("C:\\Users\\jorda\\python.exe C:\\Users\\jorda\\main.py *");
+  });
+
+  it("handles mixed forward and backward slashes", () => {
+    const cmd = "C:\\Users/jorda\\python.exe C:\\Users/jorda\\main.py";
+    const v = derivePatternVariants(cmd);
+    expect(v.length).toBeGreaterThanOrEqual(2);
+    expect(v[0].pattern).toBe(cmd);
+    expect(v[1].pattern).toBe("C:\\Users/jorda\\python.exe C:\\Users/jorda\\main.py *");
+  });
+
+  it("handles quoted double-quote arguments — script-level collapses them", () => {
+    const cmd = 'C:/Users/jorda/python.exe C:/Users/jorda/main.py "arg with spaces" --flag';
+    const v = derivePatternVariants(cmd);
+    expect(v.length).toBeGreaterThanOrEqual(2);
+    expect(v[0].pattern).toBe(cmd);
+    expect(v[1].pattern).toBe("C:/Users/jorda/python.exe C:/Users/jorda/main.py *");
+  });
+
+  it("handles single-quoted arguments", () => {
+    const cmd = "C:/Users/jorda/python.exe C:/Users/jorda/main.py 'arg with spaces'";
+    const v = derivePatternVariants(cmd);
+    expect(v.length).toBeGreaterThanOrEqual(2);
+    expect(v[0].pattern).toBe(cmd);
+  });
+
+  it("includes exe * variant when exe has no path separators (bare command)", () => {
+    const cmd = "python C:/Users/jorda/main.py";
+    const v = derivePatternVariants(cmd);
+    expect(v.find(x => x.pattern === "python *")).toBeDefined();
+  });
+
+  // ── Real-world examples ───────────────────────────────────────────────────
+
+  it("real-world: python web-search command — 3 variants in order", () => {
+    const cmd =
+      'C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe ' +
+      'C:/Users/jorda/.claude/skills/web-search/main.py search_query "query text"';
+    const v = derivePatternVariants(cmd);
+    expect(v.length).toBeGreaterThanOrEqual(3);
+    expect(v[0].pattern).toBe(cmd);
+    expect(v[0].label).toBe(cmd);
+    expect(v[1].pattern).toBe(
+      "C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe " +
+      "C:/Users/jorda/.claude/skills/web-search/main.py *"
+    );
+    expect(v[2].pattern).toBe(
+      "C:/Users/jorda/.claude/skills/web-search/venv/Scripts/python.exe *"
+    );
+    expect(v[2].label).toBe("python.exe *");
+  });
+
+  it("real-world: npm build command includes npm * variant", () => {
+    const cmd = "npm run build";
+    const v = derivePatternVariants(cmd);
+    expect(v.length).toBeGreaterThanOrEqual(2);
+    expect(v[0].pattern).toBe("npm run build");
+    expect(v.some(x => x.pattern === "npm *")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-positional subcommand CLIs (gh, docker, npm run …)
+// ---------------------------------------------------------------------------
+describe("derivePatternVariants — multi-positional subcommand CLIs", () => {
+  it("generates progressive variants for gh issue create (exact bug reproduction)", () => {
+    // The real command that was missing the gh issue create * option
+    const cmd =
+      'gh issue create --title "Polish project for professional presentation" ' +
+      '--body "## Goal Make the project look more professional" ' +
+      '--label "infra" 2>&1';
+
+    const v = derivePatternVariants(cmd);
+    const patterns = v.map(x => x.pattern);
+
+    // All 4 options must be present
+    expect(patterns).toContain(cmd);               // 1. exact
+    expect(patterns).toContain("gh issue create *"); // 2. subcommand level
+    expect(patterns).toContain("gh issue *");        // 3. command group level
+    expect(patterns).toContain("gh *");              // 4. exe level
+
+    expect(v.length).toBeGreaterThanOrEqual(4);
+    expect(patterns[0]).toBe(cmd); // exact always first
+
+    const unique = new Set(patterns);
+    expect(unique.size).toBe(patterns.length); // no duplicates
+  });
+
+  it("stops collecting positionals at the first flag", () => {
+    const cmd = 'gh issue create --title "test" --body "text"';
+    const patterns = derivePatternVariants(cmd).map(x => x.pattern);
+    expect(patterns).not.toContain("gh issue create --title *");
+    expect(patterns).not.toContain("gh issue --title *");
+    expect(patterns).toContain("gh issue create *");
+    expect(patterns).toContain("gh issue *");
+    expect(patterns).toContain("gh *");
+  });
+
+  it("npm run build — generates npm run build *, npm run *, npm *", () => {
+    const patterns = derivePatternVariants("npm run build --production --watch").map(x => x.pattern);
+    expect(patterns).toContain("npm run build *");
+    expect(patterns).toContain("npm run *");
+    expect(patterns).toContain("npm *");
+  });
+
+  it("docker run with multiple positional args", () => {
+    const patterns = derivePatternVariants("docker run ubuntu:20.04 bash --version").map(x => x.pattern);
+    expect(patterns).toContain("docker run ubuntu:20.04 *");
+    expect(patterns).toContain("docker run *");
+    expect(patterns).toContain("docker *");
+  });
+
+  it("single positional arg still generates exe + arg * and exe * variants", () => {
+    const patterns = derivePatternVariants("npm install lodash").map(x => x.pattern);
+    expect(patterns).toContain("npm install lodash"); // exact
+    expect(patterns).toContain("npm install *");
+    expect(patterns).toContain("npm *");
+  });
+
+  it("exact variant is always first, then progressively shorter", () => {
+    const cmd = "gh issue create --title test";
+    const v = derivePatternVariants(cmd);
+    expect(v[0].pattern).toBe(cmd);
+    const patterns = v.map(x => x.pattern);
+    expect(patterns).toContain("gh issue create *");
+    expect(patterns).toContain("gh issue *");
+    expect(patterns).toContain("gh *");
+  });
+
+  it("never duplicates patterns", () => {
+    const v = derivePatternVariants("gh pr review --approve");
+    const patterns = v.map(x => x.pattern);
+    expect(new Set(patterns).size).toBe(patterns.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// File edit/write variants
+// ---------------------------------------------------------------------------
+describe("derivePatternVariants — file edits (kind=edit)", () => {
+  it("returns more than 1 variant for a simple filename", () => {
+    const v = derivePatternVariants("hello.md", "edit");
+    expect(v.length).toBeGreaterThan(1);
+  });
+
+  it("first variant is always the exact file", () => {
+    const v = derivePatternVariants("hello.md", "edit");
+    expect(v[0].pattern).toBe("hello.md");
+    expect(v[0].label).toBe("hello.md");
+  });
+
+  it("includes immediate directory wildcard", () => {
+    const patterns = derivePatternVariants("src/components/Foo.tsx", "edit").map(x => x.pattern);
+    expect(patterns).toContain("src/components/*");
+  });
+
+  it("includes workspace root wildcard when workspacePath provided", () => {
+    const patterns = derivePatternVariants(
+      "C:/projects/pipelines/src/hello.md", "edit", "C:/projects/pipelines"
+    ).map(x => x.pattern);
+    expect(patterns).toContain("C:/projects/pipelines/*");
+  });
+
+  it("always ends with catch-all * variant", () => {
+    const v = derivePatternVariants("src/hello.md", "edit");
+    expect(v[v.length - 1].pattern).toBe("*");
+    expect(v[v.length - 1].label).toBe("*");
+  });
+
+  it("does NOT include extension wildcards like *.md", () => {
+    const patterns = derivePatternVariants("hello.md", "edit").map(x => x.pattern);
+    expect(patterns.every(p => !p.startsWith("*."))).toBe(true);
+  });
+
+  it("works the same with kind=write", () => {
+    const v = derivePatternVariants("README.md", "write");
+    expect(v.length).toBeGreaterThan(1);
+    expect(v[v.length - 1].pattern).toBe("*");
+  });
+
+  it("works the same with kind=create", () => {
+    const patterns = derivePatternVariants("dist/output.js", "create").map(x => x.pattern);
+    expect(patterns).toContain("dist/*");
+    expect(patterns).toContain("*");
+  });
+
+  it("handles Windows-style backslash paths", () => {
+    const patterns = derivePatternVariants("src\\components\\Foo.tsx", "edit").map(x => x.pattern);
+    expect(patterns).toContain("src/components/*");
+  });
+
+  it("never duplicates patterns", () => {
+    const v = derivePatternVariants("C:/projects/pipelines/src/utils/helpers.ts", "edit", "C:/projects/pipelines");
+    const unique = new Set(v.map(x => x.pattern));
+    expect(unique.size).toBe(v.length);
+  });
+
+  it("deduplicates when immediate dir equals workspace root", () => {
+    const patterns = derivePatternVariants(
+      "C:/projects/pipelines/hello.md", "edit", "C:/projects/pipelines"
+    ).map(x => x.pattern);
+    expect(patterns.filter(p => p === "C:/projects/pipelines/*").length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Compound shell commands (&&, |, ;)
+// ---------------------------------------------------------------------------
+describe("derivePatternVariants — compound shell commands", () => {
+  const COMMAND = "cd LekkerLoyal && cat functions/package.json 2>/dev/null | head -40";
+  const KIND    = "execute";
+
+  it("produces exactly 3 variants: exact, scoped, and bare", () => {
+    expect(derivePatternVariants(COMMAND, KIND)).toHaveLength(3);
+  });
+
+  it("first variant is always the exact command", () => {
+    const v = derivePatternVariants(COMMAND, KIND);
+    expect(v[0].pattern).toBe(COMMAND);
+    expect(v[0].label).toBe(COMMAND);
+  });
+
+  it("second variant is scoped — first-arg directory prefix per sub-command", () => {
+    const v = derivePatternVariants(COMMAND, KIND);
+    expect(v[1].label).toBe("cd LekkerLoyal/*, cat functions/*, head *");
+    expect(v[1].pattern).toBe("cd LekkerLoyal/* && cat functions/* && head *");
+  });
+
+  it("third variant is bare — any args to any of these commands", () => {
+    const v = derivePatternVariants(COMMAND, KIND);
+    expect(v[2].label).toBe("cd *, cat *, head *");
+    expect(v[2].pattern).toBe("cd * && cat * && head *");
+  });
+
+  it("never duplicates patterns", () => {
+    const v = derivePatternVariants(COMMAND, KIND);
+    const unique = new Set(v.map(x => x.pattern));
+    expect(unique.size).toBe(v.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Edge cases
+// ---------------------------------------------------------------------------
+describe("derivePatternVariants — edge cases", () => {
+  it("returns empty array for empty string", () => {
+    expect(derivePatternVariants("")).toHaveLength(0);
+    expect(derivePatternVariants("", "edit")).toHaveLength(0);
+  });
+
+  it("returns at least 1 variant for any non-empty input", () => {
+    expect(derivePatternVariants("anything").length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
 // Shell command variants
 // ---------------------------------------------------------------------------
 describe("derivePatternVariants — shell commands", () => {
