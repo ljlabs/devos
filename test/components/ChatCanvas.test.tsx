@@ -432,7 +432,7 @@ describe("ChatCanvas", () => {
       expect(mockOnSendMessage).toHaveBeenCalled();
     });
 
-    it("should send message on Enter key", async () => {
+    it("should not send message on Enter key", async () => {
       const user = userEvent.setup();
       render(
         <ChatCanvas {...baseProps} activeThread={sampleThread} inputText="" />
@@ -442,7 +442,7 @@ describe("ChatCanvas", () => {
       );
       await user.type(textarea, "test message");
       await user.keyboard("{Enter}");
-      expect(mockOnSendMessage).toHaveBeenCalled();
+      expect(mockOnSendMessage).not.toHaveBeenCalled();
     });
 
     it("should not send on Shift+Enter", async () => {

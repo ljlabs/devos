@@ -28,6 +28,7 @@ dotenv.config();
 
 const app = express();
 const PORT = parseInt(process.env.PORT || "3000", 10);
+const HOST = process.env.HOST || "127.0.0.1";
 const DB_FILE = process.env.DB_FILE || path.join(process.cwd(), "devos.db");
 const WORKSPACES_DIR = path.join(process.cwd(), "sandbox_workspaces");
 
@@ -1052,7 +1053,7 @@ async function startServer() {
     app.get("*", (_req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
-  app.listen(PORT, "0.0.0.0", () => console.log(`Server on http://localhost:${PORT}`));
+  app.listen(PORT, HOST, () => console.log(`Server on http://${HOST}:${PORT}`));
 }
 
 // Don't auto-start the HTTP server (or boot Vite) when imported by tests.

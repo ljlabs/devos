@@ -425,7 +425,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col md:flex-row h-screen w-screen overflow-hidden bg-[#0B0B0C] text-[#e4e2e4] font-sans antialiased">
+    <div className="flex flex-col md:flex-row h-dvh w-screen overflow-hidden bg-[#0B0B0C] text-[#e4e2e4] font-sans antialiased">
       {/* COLUMN 1: WORKSPACE SIDEBAR - Hidden on mobile, collapsible on tablet, fixed on desktop */}
       <div className="hidden md:flex">
         <WorkspaceSidebar

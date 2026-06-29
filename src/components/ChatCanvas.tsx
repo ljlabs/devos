@@ -455,11 +455,8 @@ export default function ChatCanvas({
     });
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      onSendMessage();
-    }
+  const handleKeyDown = (_e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter inserts a newline; submission is via the send button only
   };
 
   if (!activeThread) {
@@ -483,7 +480,7 @@ export default function ChatCanvas({
   return (
     <main className="flex-1 flex flex-col bg-[#0B0B0C] overflow-hidden relative">
       {/* Header bar - responsive */}
-      <header className="h-12 sm:h-14 flex items-center justify-between px-3 sm:px-6 border-b border-white/5 bg-[#0E0E11]/80 backdrop-blur-md z-10 sticky top-0 select-none gap-2">
+      <header className="h-12 sm:h-14 flex items-center justify-between px-3 sm:px-6 border-b border-white/5 bg-[#0E0E11]/80 backdrop-blur-md z-10 select-none gap-2 shrink-0">
         {/* Mobile nav toggle */}
         <button 
           onClick={onToggleMobileNav}
