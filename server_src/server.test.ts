@@ -17,7 +17,7 @@ process.env.DB_FILE = TEST_DB;
 const VALID_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "devos-valid-ws-"));
 
 // Import AFTER env vars are set.
-const { app, sqliteDb } = await import("./server");
+const { app, sqliteDb, checkAllowedPattern } = await import("./server");
 
 function seedDb(data: any) {
   // For SQLite, we use the writeDb API instead of writing JSON
@@ -390,3 +390,78 @@ describe("Allowed Patterns — path normalization & tool scoping (integration)",
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// Compound command auto-approval — regression test
+//
+// Repro: "cd LekkerLoyal *" was stored as an allowed pattern. A compound
+// command "cd LekkerLoyal && gh issue create ..." was auto-approved because
+// the whole string starts with "cd LekkerLoyal " — the second sub-command
+// (gh issue create) was never checked against the pattern list.
+//
+// Expected behaviour: every sub-command in a compound command must independently
+// match a stored pattern. If any part is unrecognised, the whole command must
+// be blocked (not auto-approved).
+// ---------------------------------------------------------------------------
+
+describe("checkAllowedPattern — compound command security", () => {
+  // The two patterns that were present in the real DB when the bug was triggered.
+  const realPatterns = [
+    { pattern: "cd LekkerLoyal *",                          variant: "execute", createdAt: "2024-01-01" },
+    { pattern: "cd LekkerLoyal/* && cat functions/* && head *", variant: "execute", toolName: "Bash", createdAt: "2024-01-01" },
+  ];
+
+  // The exact compound command that was wrongly auto-approved.
+  const dangerousCommand =
+    "cd LekkerLoyal && gh issue create --repo TheJustinGreen/LekkerLoyal " +
+    '--title "CI/CD Pipeline" --label "coding" --body \'some body\' 2>&1';
+
+  it("does NOT auto-approve a compound command whose second part is not in the allow list", () => {
+    // "gh issue create ..." matches neither stored pattern, so the whole
+    // compound command must be blocked regardless of the "cd LekkerLoyal" prefix.
+    expect(checkAllowedPattern(dangerousCommand, "Bash", realPatterns)).toBe(false);
+  });
+
+  it("does NOT auto-approve when the first sub-command alone matches but the second does not", () => {
+    // Isolated check: "cd LekkerLoyal" on its own would NOT match "cd LekkerLoyal *"
+    // because the prefix includes a trailing space ("cd LekkerLoyal ") and the bare
+    // sub-command has no trailing space/argument.  Either way the compound must fail.
+    const partial = "cd LekkerLoyal && git push origin main";
+    expect(checkAllowedPattern(partial, "Bash", realPatterns)).toBe(false);
+  });
+
+  it("auto-approves a compound command only when ALL sub-commands individually match", () => {
+    // Both sub-commands are covered by the second stored pattern via its prefix.
+    // "cd LekkerLoyal/subdir" starts with "cd LekkerLoyal/"
+    // "cat functions/index.ts" starts with "cat functions/"
+    // "head -n 20" — head has no pattern, so this should still be false unless we
+    // add a pattern for it.  Use a two-part command that IS fully covered instead.
+    const allowedPatterns = [
+      { pattern: "cd LekkerLoyal/*", variant: "execute", createdAt: "2024-01-01" },
+      { pattern: "cat functions/*",  variant: "execute", createdAt: "2024-01-01" },
+    ];
+    const safeCompound = "cd LekkerLoyal/subdir && cat functions/index.ts";
+    expect(checkAllowedPattern(safeCompound, "Bash", allowedPatterns)).toBe(true);
+  });
+
+  it("blocks a compound command when at least one sub-command is not covered", () => {
+    const allowedPatterns = [
+      { pattern: "cd LekkerLoyal/*", variant: "execute", createdAt: "2024-01-01" },
+      // No pattern for "gh" commands
+    ];
+    const mixed = "cd LekkerLoyal/subdir && gh issue create --title test";
+    expect(checkAllowedPattern(mixed, "Bash", allowedPatterns)).toBe(false);
+  });
+
+  it("still auto-approves a simple (non-compound) command that matches", () => {
+    const allowedPatterns = [
+      { pattern: "cd LekkerLoyal *", variant: "execute", createdAt: "2024-01-01" },
+    ];
+    // Non-compound with a matching prefix
+    expect(checkAllowedPattern("cd LekkerLoyal subdir", undefined, allowedPatterns)).toBe(true);
+  });
+
+  it("still blocks a simple command that does not match any pattern", () => {
+    expect(checkAllowedPattern("gh issue create --title test", "Bash", realPatterns)).toBe(false);
+  });
+});

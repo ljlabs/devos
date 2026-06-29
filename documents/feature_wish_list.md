@@ -1,3 +1,1 @@
-1. I would like the chat box to expand as i keep adding new lines. this expansion needs to stop at 10 lines, at which case i need to rely on scrolling in the caht box.
-2. When i insert multiple lines in the chat box i cannot see multiple lines in my message in the chat window
-3. when i click always allow, id also like the option to allow similar. this means we need a allow similar section to the db, basiccally just allow *
+1. if like to see the git branch that a workspace is running, id also like when i click Edit Workspace, id like it to show a git section, show the active git branch, a small window for git status, and also a drop down to switch git branchs, a way to do git stash, git stash pop/apply/drop feature will also be useful in this settings modal.

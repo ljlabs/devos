@@ -136,28 +136,57 @@ function deriveShellVariants(command: string): Array<{ label: string; pattern: s
   const exe = parts[0];
   const exeName = exe.split(/[\\/]/).pop() ?? exe; // basename
 
-  // Script-level wildcard: exe + script + *
-  if (parts.length >= 2) {
-    const script = parts[1];
-    const scriptPattern = `${exe} ${script} *`;
-    if (scriptPattern !== command) {
-      variants.push({ label: scriptPattern, pattern: scriptPattern });
+  // Find the longest run of positional args (non-options) after the executable.
+  // Options start with - or 2>, so stop there.
+  const positionalArgs: string[] = [];
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i];
+    if (part.startsWith("-") || part.startsWith("2>")) {
+      break; // Hit an option/redirect, stop collecting positionals
+    }
+    positionalArgs.push(part);
+  }
+
+  // Determine how many positional depth levels to generate variants for.
+  //
+  // For subcommand-style CLIs (e.g. "gh issue create --title ..."):
+  //   positionalArgs = ["issue", "create"] → generate gh issue create *, gh issue *, gh *
+  //
+  // For script-style invocations (e.g. "python.exe main.py search_query 'text'"):
+  //   The second positional looks like a file path (has extension or path separator).
+  //   In that case, only generate the script-level variant ("python.exe main.py *")
+  //   rather than ("python.exe main.py search_query *") — the extra depth is noise.
+  let maxDepth = positionalArgs.length;
+  if (
+    positionalArgs.length >= 1 &&
+    (positionalArgs[0].includes("/") ||
+      positionalArgs[0].includes("\\") ||
+      /\.\w{1,6}$/.test(positionalArgs[0]))
+  ) {
+    // First positional looks like a file path — treat as script, cap depth at 1
+    maxDepth = 1;
+  }
+
+  // Generate variants from exe + positional args, from longest to shortest.
+  // For "gh issue create --title ...", generates:
+  //   1. gh issue create *
+  //   2. gh issue *
+  //   3. gh *
+  for (let i = maxDepth; i >= 1; i--) {
+    const positionalSlice = positionalArgs.slice(0, i).join(" ");
+    const pattern = `${exe} ${positionalSlice} *`;
+    if (pattern !== command && !variants.some(v => v.pattern === pattern)) {
+      // Label equals the full pattern — so the displayed text is unambiguous
+      variants.push({ label: pattern, pattern });
     }
   }
 
   // Executable-level wildcard: exe + *
+  // Only meaningful when the command actually has arguments to wildcard over.
   if (parts.length >= 2) {
     const exePattern = `${exe} *`;
     if (exePattern !== command && !variants.some(v => v.pattern === exePattern)) {
       variants.push({ label: `${exeName} *`, pattern: exePattern });
-    }
-  }
-
-  // Simple name wildcard for bare commands (no path separators)
-  if (!exe.includes("/") && !exe.includes("\\") && exe !== command) {
-    const simplePattern = `${exe} *`;
-    if (!variants.some(v => v.pattern === simplePattern)) {
-      variants.push({ label: simplePattern, pattern: simplePattern });
     }
   }
 

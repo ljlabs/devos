@@ -180,3 +180,103 @@ describe("derivePatternVariants — edge cases", () => {
     expect(derivePatternVariants("anything").length).toBeGreaterThanOrEqual(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multi-positional argument commands (e.g., gh issue create, npm run build)
+// ---------------------------------------------------------------------------
+describe("derivePatternVariants — multi-positional commands", () => {
+  it("generates progressive variants from exe + each positional arg level (exact bug case)", () => {
+    // Real-world gh issue create command with options
+    const cmd =
+      'gh issue create --title "Polish project for professional presentation" ' +
+      '--body "## Goal Make the project look more professional" ' +
+      '--label "infra" 2>&1';
+
+    const v = derivePatternVariants(cmd);
+    const patterns = v.map(x => x.pattern);
+
+    // Should have: exact, gh issue create *, gh issue *, gh *
+    expect(v.length).toBeGreaterThanOrEqual(4);
+
+    // 1. Exact command (all quoted/complex args)
+    expect(patterns).toContain(cmd);
+
+    // 2. gh issue create * — longest positional run
+    expect(patterns).toContain("gh issue create *");
+
+    // 3. gh issue * — shorter run
+    expect(patterns).toContain("gh issue *");
+
+    // 4. gh * — exe only
+    expect(patterns).toContain("gh *");
+
+    // Verify order: exact first
+    expect(patterns[0]).toBe(cmd);
+
+    // Verify no duplicates
+    const unique = new Set(patterns);
+    expect(unique.size).toBe(patterns.length);
+  });
+
+  it("stops collecting positionals at the first flag (--option or 2>)", () => {
+    const cmd = 'gh issue create --title "test" --body "text"';
+    const v = derivePatternVariants(cmd);
+    const patterns = v.map(x => x.pattern);
+
+    // Should NOT include patterns like "gh issue create --title *" or "gh issue --title *"
+    // Only: gh issue create *, gh issue *, gh *, and exact
+    expect(patterns).not.toContain("gh issue create --title *");
+    expect(patterns).not.toContain("gh issue --title *");
+
+    // Should include the correct variants
+    expect(patterns).toContain("gh issue create *");
+    expect(patterns).toContain("gh issue *");
+    expect(patterns).toContain("gh *");
+  });
+
+  it("handles npm run build with positional args", () => {
+    const cmd = "npm run build --production --watch";
+    const v = derivePatternVariants(cmd);
+    const patterns = v.map(x => x.pattern);
+
+    // npm, run, build are positional; --production and --watch are options
+    expect(patterns).toContain("npm run build *");
+    expect(patterns).toContain("npm run *");
+    expect(patterns).toContain("npm *");
+  });
+
+  it("handles docker run with multiple positionals", () => {
+    const cmd = "docker run ubuntu:20.04 bash --version";
+    const v = derivePatternVariants(cmd);
+    const patterns = v.map(x => x.pattern);
+
+    // All are positional before the option-like flag (--version)
+    // Actually --version starts with --, so it stops there
+    expect(patterns).toContain("docker run ubuntu:20.04 *");
+    expect(patterns).toContain("docker run *");
+    expect(patterns).toContain("docker *");
+  });
+
+  it("single positional arg still generates exe + arg * and exe * variants", () => {
+    const cmd = "npm install lodash";
+    const v = derivePatternVariants(cmd);
+    const patterns = v.map(x => x.pattern);
+
+    expect(patterns).toContain(cmd);           // exact
+    expect(patterns).toContain("npm install *"); // exe + positional(s)
+    expect(patterns).toContain("npm *");         // exe only
+  });
+
+  it("preserves order: exact first, then progressively shorter patterns", () => {
+    const cmd = "gh issue create --title test";
+    const v = derivePatternVariants(cmd);
+
+    expect(v[0].pattern).toBe(cmd); // exact always first
+    // Then variants in descending specificity
+    const patterns = v.map(x => x.pattern);
+    expect(patterns).toContain("gh issue create *");
+    expect(patterns).toContain("gh issue *");
+    expect(patterns).toContain("gh *");
+  });
+});
+

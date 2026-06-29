@@ -663,27 +663,25 @@ function generatePatternVariants(fullCommand: string): Array<{ variant: string; 
 // Helper: Check if a command matches any stored pattern
 // ---------------------------------------------------------------------------
 
-function checkAllowedPattern(command: string, toolName: string | undefined, patterns: any[]): boolean {
-  if (!patterns || patterns.length === 0) return false;
-  if (!command || typeof command !== "string") return false;
-
-  // Normalise to forward slashes for consistent matching across platforms
-  const normCommand = command.replace(/\\/g, "/");
-
+/**
+ * Check whether a single (non-compound) command matches any stored pattern.
+ * Patterns are matched with forward-slash normalisation and simple * wildcards.
+ */
+function matchesSinglePattern(normCommand: string, toolName: string | undefined, patterns: any[]): boolean {
   for (const pattern of patterns) {
     const pat: string = (pattern.pattern || pattern);
 
-    // If the pattern has a toolName, it must match
+    // If the pattern has a toolName, it must match the incoming tool
     if (pattern.toolName && toolName && pattern.toolName !== toolName) continue;
 
     const normPat = pat.replace(/\\/g, "/");
 
-    // Simple wildcard matching
+    // "*" matches everything
     if (normPat === "*") return true;
 
-    // If pattern ends with *, use prefix matching
+    // Pattern ending with * → prefix match
     if (normPat.endsWith("*")) {
-      const prefix = normPat.slice(0, -1); // Remove the *
+      const prefix = normPat.slice(0, -1);
       if (normCommand.startsWith(prefix)) return true;
     } else {
       // Exact match
@@ -692,6 +690,41 @@ function checkAllowedPattern(command: string, toolName: string | undefined, patt
   }
 
   return false;
+}
+
+/**
+ * Check if a command (possibly compound) is fully covered by stored allow patterns.
+ *
+ * For compound commands joined by &&, ||, |, or ;, the command is split into
+ * individual sub-commands. ALL sub-commands must independently match a stored
+ * pattern for the compound command to be auto-approved.
+ *
+ * This prevents a pattern like "cd LekkerLoyal *" from silently approving
+ * "cd LekkerLoyal && gh issue create ..." because the second part (gh issue
+ * create) is never in the allowed list.
+ */
+function checkAllowedPattern(command: string, toolName: string | undefined, patterns: any[]): boolean {
+  if (!patterns || patterns.length === 0) return false;
+  if (!command || typeof command !== "string") return false;
+
+  // Normalise path separators once
+  const normCommand = command.replace(/\\/g, "/");
+
+  // Detect compound commands
+  const isCompound = /&&|\|\|?|;/.test(normCommand);
+
+  if (!isCompound) {
+    return matchesSinglePattern(normCommand, toolName, patterns);
+  }
+
+  // Split on compound operators, preserving each sub-command
+  const subCommands = normCommand
+    .split(/\s*(?:&&|\|\|?|;)\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  // Every sub-command must be independently allowed
+  return subCommands.every((sub) => matchesSinglePattern(sub, toolName, patterns));
 }
 
 // ---------------------------------------------------------------------------
@@ -975,4 +1008,4 @@ if (process.env.NODE_ENV !== "test") {
   startServer();
 }
 
-export { app, sqliteDb };
+export { app, sqliteDb, checkAllowedPattern };
