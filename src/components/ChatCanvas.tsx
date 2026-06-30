@@ -24,8 +24,6 @@ import {
   XCircle,
   Paperclip,
   Send,
-  Copy,
-  Check,
   ChevronDown,
   ChevronUp,
   Cpu,
@@ -36,6 +34,7 @@ import {
   Menu
 } from "lucide-react";
 import { Message, Thread } from "../types";
+import CopyButton from "./CopyButton";
 
 /** Renders a collapsible thinking block for agent internal reasoning */
 function ThinkingBlock({ content }: { content: string }) {
@@ -633,6 +632,9 @@ export default function ChatCanvas({
                       </div>
                       <MarkdownContent content={textContent} />
                     </div>
+                    <div className="mt-1 flex justify-end">
+                      <CopyButton content={textContent} />
+                    </div>
                   </div>
                 </div>
               );
@@ -656,6 +658,9 @@ export default function ChatCanvas({
                         </span>
                       </div>
                       <MarkdownContent content={parsed.content} />
+                    </div>
+                    <div className="mt-1 flex justify-end">
+                      <CopyButton content={parsed.content} />
                     </div>
                   </div>
                 </div>
@@ -928,58 +933,6 @@ export default function ChatCanvas({
               }
 
               return null;
-            }
-
-            // Agent text response
-            if (parsed.type === "agent_text") {
-              const textContent = Array.isArray(parsed.content)
-                ? parsed.content.find((c: any) => c.type === "text")?.text || ""
-                : parsed.content;
-
-              if (!textContent) return null;
-
-              return (
-                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text">
-                  <div className="w-8 h-8 bg-emerald-500/20 border border-emerald-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.15)] select-none">
-                    <Bot size={16} className="text-emerald-400" />
-                  </div>
-                  <div className="flex-1 max-w-[90%]">
-                    <div className="bg-[#0E0E11] border border-white/5 p-5 rounded-2xl rounded-tl-none">
-                      <div className="flex items-center justify-between pb-2 mb-3 border-b border-white/5 select-none text-[10px] font-mono tracking-widest text-emerald-400 font-bold">
-                        <span>CLAUDE AI AGENT</span>
-                        <span className="text-slate-500 font-normal">
-                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                      <MarkdownContent content={textContent} />
-                    </div>
-                  </div>
-                </div>
-              );
-            }
-
-            // Agent text chunk (streaming)
-            if (parsed.type === "agent_chunk") {
-              if (!parsed.content) return null;
-
-              return (
-                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text">
-                  <div className="w-8 h-8 bg-emerald-500/20 border border-emerald-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.15)] select-none">
-                    <Bot size={16} className="text-emerald-400" />
-                  </div>
-                  <div className="flex-1 max-w-[90%]">
-                    <div className="bg-[#0E0E11] border border-white/5 p-5 rounded-2xl rounded-tl-none">
-                      <div className="flex items-center justify-between pb-2 mb-3 border-b border-white/5 select-none text-[10px] font-mono tracking-widest text-emerald-400 font-bold">
-                        <span>CLAUDE AI AGENT</span>
-                        <span className="text-slate-500 font-normal">
-                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                      <MarkdownContent content={parsed.content} />
-                    </div>
-                  </div>
-                </div>
-              );
             }
 
             return null;

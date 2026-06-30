@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { ArrowLeft, Send, Square, Bot, Terminal, ShieldAlert, CheckCircle2, XCircle, Zap } from "lucide-react";
 import { Thread, Message } from "../types";
+import CopyButton from "./CopyButton";
 // Reuse the EXACT same parsing logic as the desktop - this prevents message type divergence
 import { PermissionBubble, getMessageContent, MarkdownContent } from "./ChatCanvas";
 
@@ -186,6 +187,9 @@ export default function MobileChatCanvas({
                       </div>
                       <MarkdownContent content={textContent} />
                     </div>
+                    <div className="mt-1 flex justify-end">
+                      <CopyButton content={textContent} />
+                    </div>
                   </div>
                 </div>
               );
@@ -204,6 +208,9 @@ export default function MobileChatCanvas({
                     <div className="bg-[#0E0E11] border border-white/5 p-2.5 rounded-lg rounded-tl-none text-xs">
                       <div className="text-[9px] font-mono text-emerald-400 pb-1.5 mb-1.5 border-b border-white/5">CLAUDE</div>
                       <MarkdownContent content={parsed.content} />
+                    </div>
+                    <div className="mt-1 flex justify-end">
+                      <CopyButton content={parsed.content} />
                     </div>
                   </div>
                 </div>
