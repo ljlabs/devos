@@ -66,11 +66,26 @@ export default function MobileChatCanvas({
     return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
   };
 
+  // Scroll to bottom on new messages
   useEffect(() => {
     if (isNearBottom()) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      // Use a small delay to ensure DOM has updated
+      const timeoutId = setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 0);
+      return () => clearTimeout(timeoutId);
     }
   }, [messages]);
+
+  // Also scroll to bottom when thread changes (new chat window opened)
+  useEffect(() => {
+    if (activeThread) {
+      const timeoutId = setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+      }, 0);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [activeThread?.id]);
 
   const handleTextareaChange = (text: string) => {
     onChangeInput(text);
