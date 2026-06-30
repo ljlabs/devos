@@ -4,11 +4,18 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
-import { ArrowLeft, Send, Square, Bot, Terminal, ShieldAlert, CheckCircle2, XCircle, Zap } from "lucide-react";
+import { ArrowLeft, Send, Square, Bot, Terminal, CheckCircle2, XCircle, Zap } from "lucide-react";
 import { Thread, Message } from "../types";
 import CopyButton from "./CopyButton";
-// Reuse the EXACT same parsing logic as the desktop - this prevents message type divergence
-import { PermissionBubble, getMessageContent, MarkdownContent } from "./ChatCanvas";
+import { MarkdownContent } from "./shared/MarkdownContent";
+import { PermissionBubble } from "./shared/PermissionBubble";
+import { StatusIndicatorPillMobile } from "./shared/StatusIndicatorPillMobile";
+import { getMessageContent } from "./ChatCanvas";
+import { UserMessageBubble } from "./shared/UserMessageBubble";
+import { AgentTextBubble } from "./shared/AgentTextBubble";
+import { AgentChunkBubble } from "./shared/AgentChunkBubble";
+import { ToolPendingBubble } from "./shared/ToolPendingBubble";
+import { ToolResultBubble } from "./shared/ToolResultBubble";
 
 interface MobileChatCanvasProps {
   activeThread: Thread | null;
@@ -156,14 +163,12 @@ export default function MobileChatCanvas({
             // --- USER MESSAGE ---
             if (parsed.type === "user") {
               return (
-                <div key={msg.id} className="flex justify-end">
-                  <div className="max-w-[85%] bg-[#18181B] border border-white/5 p-2.5 rounded-lg rounded-tr-none text-xs">
-                    <p className="leading-relaxed text-slate-200 whitespace-pre-wrap break-words">{parsed.content}</p>
-                    <div className="text-[9px] text-slate-500 font-mono mt-1 text-right">
-                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </div>
-                  </div>
-                </div>
+                <UserMessageBubble
+                  key={msg.id}
+                  content={parsed.content}
+                  timestamp={msg.timestamp}
+                  compact={true}
+                />
               );
             }
 
@@ -175,23 +180,12 @@ export default function MobileChatCanvas({
               if (!textContent) return null;
 
               return (
-                <div key={msg.id} className="flex justify-start gap-2">
-                  <div className="w-6 h-6 bg-emerald-500/20 border border-emerald-500/40 rounded flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <Bot size={12} className="text-emerald-400" />
-                  </div>
-                  <div className="flex-1 max-w-[88%]">
-                    <div className="bg-[#0E0E11] border border-white/5 p-2.5 rounded-lg rounded-tl-none text-xs">
-                      <div className="text-[9px] font-mono text-emerald-400 pb-1.5 mb-1.5 border-b border-white/5 flex justify-between">
-                        <span>CLAUDE</span>
-                        <span className="text-slate-500">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                      </div>
-                      <MarkdownContent content={textContent} />
-                    </div>
-                    <div className="mt-1 flex justify-end">
-                      <CopyButton content={textContent} />
-                    </div>
-                  </div>
-                </div>
+                <AgentTextBubble
+                  key={msg.id}
+                  content={textContent}
+                  timestamp={msg.timestamp}
+                  compact={true}
+                />
               );
             }
 
@@ -200,20 +194,12 @@ export default function MobileChatCanvas({
               if (!parsed.content) return null;
 
               return (
-                <div key={msg.id} className="flex justify-start gap-2">
-                  <div className="w-6 h-6 bg-emerald-500/20 border border-emerald-500/40 rounded flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <Bot size={12} className="text-emerald-400" />
-                  </div>
-                  <div className="flex-1 max-w-[88%]">
-                    <div className="bg-[#0E0E11] border border-white/5 p-2.5 rounded-lg rounded-tl-none text-xs">
-                      <div className="text-[9px] font-mono text-emerald-400 pb-1.5 mb-1.5 border-b border-white/5">CLAUDE</div>
-                      <MarkdownContent content={parsed.content} />
-                    </div>
-                    <div className="mt-1 flex justify-end">
-                      <CopyButton content={parsed.content} />
-                    </div>
-                  </div>
-                </div>
+                <AgentChunkBubble
+                  key={msg.id}
+                  content={parsed.content}
+                  timestamp={msg.timestamp}
+                  compact={true}
+                />
               );
             }
 
@@ -245,62 +231,22 @@ export default function MobileChatCanvas({
               const isCompleted = resultStatus === "completed";
 
               return (
-                <div key={msg.id} className="flex justify-start gap-2">
-                  <div className={`w-6 h-6 rounded flex items-center justify-center flex-shrink-0 mt-0.5 border ${
-                    isFailed ? "bg-red-500/20 border-red-500/40"
-                    : hasApproval
-                      ? permissionApproved ? "bg-emerald-500/20 border-emerald-500/40" : "bg-red-500/20 border-red-500/40"
-                      : "bg-slate-500/20 border-slate-500/40"
-                  }`}>
-                    {isFailed ? <XCircle size={12} className="text-red-400" />
-                    : hasApproval
-                      ? permissionApproved ? <CheckCircle2 size={12} className="text-emerald-400" /> : <XCircle size={12} className="text-red-400" />
-                      : isCompleted ? <Terminal size={12} className="text-emerald-400" />
-                      : <Zap size={12} className="text-slate-400 animate-pulse" />}
-                  </div>
-                  <div className="flex-1 max-w-[88%]">
-                    <div className={`border rounded-lg overflow-hidden bg-black/40 ${isFailed ? "border-red-500/30" : "border-slate-500/20"}`}>
-                      <button
-                        onClick={() => hasResult ? setExpandedToolId(isExpanded ? null : toolCallId) : undefined}
-                        className={`w-full flex items-center justify-between px-3 py-2 border-b text-left ${
-                          isFailed ? "bg-red-950/40 border-red-500/20" : "bg-[#0E0E11] border-slate-500/10"
-                        } ${hasResult ? "cursor-pointer" : ""}`}
-                        disabled={!hasResult}
-                      >
-                        <div className="flex items-center gap-2 flex-1 min-w-0">
-                          <span className={`text-[9px] font-mono font-bold uppercase tracking-wider truncate ${isFailed ? "text-red-400" : "text-slate-400"}`}>
-                            {kind?.toUpperCase() || "TOOL"}: {title || "pending…"}
-                          </span>
-                          {isFailed && (
-                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30 flex-shrink-0">✗ Failed</span>
-                          )}
-                          {!isFailed && hasApproval && (
-                            <span className={`text-[9px] px-1.5 py-0.5 rounded flex-shrink-0 ${
-                              permissionApproved ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "bg-red-500/20 text-red-300 border border-red-500/30"
-                            }`}>
-                              {permissionApproved ? "✓ Approved" : "✗ Rejected"}
-                            </span>
-                          )}
-                        </div>
-                        {hasResult && (
-                          <span className={`text-[9px] ml-2 flex-shrink-0 ${isFailed ? "text-red-400/70" : "text-slate-500"}`}>
-                            {isExpanded ? "▼" : "▶"}
-                          </span>
-                        )}
-                      </button>
-
-                      {hasResult && isExpanded && resultMsg && (
-                        <div className={`p-2.5 max-h-48 overflow-y-auto custom-scrollbar ${isFailed ? "bg-red-950/20" : "bg-black/95"}`}>
-                          <pre className={`font-mono text-[10px] whitespace-pre-wrap break-words ${isFailed ? "text-red-300" : "text-slate-300"}`}>
-                            {typeof resultMsg.raw?.params?.update?.rawOutput === 'string'
-                              ? resultMsg.raw.params.update.rawOutput
-                              : JSON.stringify(resultMsg.raw?.params?.update?.rawOutput, null, 2)}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
+                <ToolPendingBubble
+                  key={msg.id}
+                  toolCallId={toolCallId}
+                  title={title}
+                  kind={kind}
+                  status={status}
+                  timestamp={msg.timestamp}
+                  resultMsg={resultMsg}
+                  resultStatus={resultStatus}
+                  permissionApproved={permissionApproved}
+                  permissionRejected={permissionRejected}
+                  hasApproval={hasApproval}
+                  isExpanded={isExpanded}
+                  onToggleExpand={(id) => setExpandedToolId(expandedToolId === id ? null : id)}
+                  compact={true}
+                />
               );
             }
 
@@ -316,25 +262,14 @@ export default function MobileChatCanvas({
 
               const { kind, rawOutput } = parsed.content;
               return (
-                <div key={msg.id} className="flex justify-start gap-2">
-                  <div className="w-6 h-6 bg-emerald-500/20 border border-emerald-500/40 rounded flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <CheckCircle2 size={12} className="text-emerald-400" />
-                  </div>
-                  <div className="flex-1 max-w-[88%]">
-                    <div className="border border-emerald-500/20 rounded-lg overflow-hidden bg-emerald-500/5">
-                      <div className="px-3 py-1.5 bg-emerald-500/10 border-b border-emerald-500/20">
-                        <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-emerald-400">
-                          {kind?.toUpperCase() || "TOOL"}: Complete
-                        </span>
-                      </div>
-                      <div className="p-2.5 bg-black/95 max-h-48 overflow-y-auto custom-scrollbar">
-                        <pre className="font-mono text-[10px] text-slate-300 whitespace-pre-wrap break-words">
-                          {typeof rawOutput === 'string' ? rawOutput : JSON.stringify(rawOutput, null, 2)}
-                        </pre>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <ToolResultBubble
+                  key={msg.id}
+                  title={undefined}
+                  kind={kind}
+                  rawOutput={rawOutput}
+                  timestamp={msg.timestamp}
+                  compact={true}
+                />
               );
             }
 
@@ -365,21 +300,8 @@ export default function MobileChatCanvas({
         )}
 
         {/* Agent status indicator */}
-        {(activeThread.status === "thinking" || activeThread.status === "running" || activeThread.status === "awaiting_permission") && (
-          <div className="text-center py-3">
-            <div className={`inline-flex items-center gap-2 border px-3 py-1.5 rounded-full text-[11px] font-mono ${
-              activeThread.status === "awaiting_permission"
-                ? "bg-[#0E0E11] border-amber-500/30 text-amber-400"
-                : "bg-[#0E0E11] border-emerald-500/20 text-emerald-400"
-            }`}>
-              <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${
-                activeThread.status === "awaiting_permission" ? "bg-amber-500" : "bg-emerald-500"
-              }`} />
-              {activeThread.status === "thinking" ? "Claude is thinking..."
-                : activeThread.status === "running" ? "Claude is executing..."
-                : "Awaiting approval..."}
-            </div>
-          </div>
+        {activeThread.status !== "idle" && (
+          <StatusIndicatorPillMobile status={activeThread.status} />
         )}
 
         {/* Error pill */}

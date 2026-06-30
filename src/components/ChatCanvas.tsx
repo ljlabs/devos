@@ -12,22 +12,15 @@
  */
 
 import React, { useState, useRef, useEffect } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { derivePatternVariants } from "../utils/patterns";
 import {
   Terminal,
   Bot,
   User,
-  ShieldAlert,
+  Cpu,
   CheckCircle2,
   XCircle,
   Paperclip,
   Send,
-  ChevronDown,
-  ChevronUp,
-  Cpu,
-  Layers,
   Sparkles,
   Zap,
   Square,
@@ -35,98 +28,20 @@ import {
 } from "lucide-react";
 import { Message, Thread } from "../types";
 import CopyButton from "./CopyButton";
-
-/** Renders a collapsible thinking block for agent internal reasoning */
-function ThinkingBlock({ content }: { content: string }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  return (
-    <div className="my-3 border border-emerald-500/20 rounded-lg overflow-hidden bg-emerald-500/5 animate-fadeIn">
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center justify-between px-3 py-2 text-xs font-mono text-emerald-400 hover:bg-emerald-500/10 transition-colors select-none group"
-      >
-        <div className="flex items-center gap-2">
-          <Cpu size={14} className="text-emerald-500 group-hover:animate-pulse" />
-          <span className="font-bold uppercase tracking-wider">Thinking Process</span>
-        </div>
-        {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-      </button>
-      {isExpanded && (
-        <div className="px-3 py-3 border-t border-emerald-500/20 text-slate-400 text-xs italic leading-relaxed bg-black/20">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Renders markdown content with dark-theme styling for agent bubbles */
-function MarkdownContent({ content }: { content: string }) {
-  const segments = content.split(/(<thought>[\s\S]*?<\/thought>)/g);
-
-  return (
-    <div className="prose prose-invert prose-sm max-w-none break-words
-      prose-headings:text-slate-200 prose-headings:font-semibold
-      prose-p:text-slate-300 prose-p:leading-relaxed
-      prose-a:text-emerald-400 prose-a:no-underline hover:prose-a:underline
-      prose-strong:text-slate-200 prose-strong:font-semibold
-      prose-code:text-emerald-400 prose-code:bg-white/5 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:font-mono prose-code:before:content-none prose-code:after:content-none
-      prose-pre:bg-black/60 prose-pre:border prose-pre:border-white/5 prose-pre:rounded-lg
-      prose-lead:text-slate-300
-      prose-li:text-slate-300
-      prose-td:text-slate-300 prose-th:text-slate-200 prose-th:font-semibold
-      prose-thead:border-b prose-thead:border-white/10
-      prose-table:border-collapse prose-td:border prose-td:border-white/5 prose-th:border prose-th:border-white/5
-      prose-blockquote:border-emerald-500/30 prose-blockquote:text-slate-400 prose-blockquote:italic
-      prose-hr:border-white/10
-      prose-img:rounded-lg
-    ">
-      {segments.map((segment, i) => {
-        if (segment.startsWith('<thought>') && segment.endsWith('</thought>')) {
-          const thoughtContent = segment.slice(9, -10);
-          return <ThinkingBlock key={i} content={thoughtContent} />;
-        }
-        return <ReactMarkdown key={i} remarkPlugins={[remarkGfm]}>{segment}</ReactMarkdown>;
-      })}
-    </div>
-  );
-}
-
-interface ChatCanvasProps {
-  activeThread: Thread | null;
-  messages: Message[];
-  inputText: string;
-  onChangeInput: (text: string) => void;
-  onSendMessage: () => void;
-  onCancelAgent: () => void;
-  onPermissionResponse: (optionId: string, toolCommand?: string, toolName?: string) => void;
-  onDeploy: () => void;
-  isDeploying: boolean;
-  threadLogs: any[];
-  onClearThreadLogs: () => void;
-  workspacePath?: string;
-  onToggleMobileNav?: () => void;
-}
+import { MarkdownContent } from "./shared/MarkdownContent";
+import { PermissionBubble } from "./shared/PermissionBubble";
+import { StatusIndicatorPill } from "./shared/StatusIndicatorPill";
+import { UserMessageBubble } from "./shared/UserMessageBubble";
+import { AgentTextBubble } from "./shared/AgentTextBubble";
+import { AgentChunkBubble } from "./shared/AgentChunkBubble";
+import { ToolPendingBubble } from "./shared/ToolPendingBubble";
+import { ToolResultBubble } from "./shared/ToolResultBubble";
 
 /**
  * Parse raw ACP message to extract user-facing content
  * Supports all ACP chat object types
- * 
- * Supported message types:
- * - user messages (role: "user")
- * - agent_message_chunk (streaming text)
- * - session/update:
- *   - available_commands_update
- *   - tool_call (pending)
- *   - tool_call_update (result)
- *   - agent_message_chunk (alt format)
- *   - usage_update
- *   - session_info_update
- * - session/request_permission (permission prompts)
- * - response (JSON-RPC responses)
- * - permission_response (user choices)
  */
-function getMessageContent(msg: Message): { type: string; content: any } | null {
+export function getMessageContent(msg: Message): { type: string; content: any } | null {
   const raw = msg.raw;
   if (!raw) return null;
 
@@ -252,174 +167,22 @@ function getMessageContent(msg: Message): { type: string; content: any } | null 
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// PermissionBubble — inline pattern picker for "Allow Similar"
-// ---------------------------------------------------------------------------
-
-function PermissionBubble({
-  toolCall,
-  options,
-  onRespond,
-  timestamp,
-  workspacePath,
-}: {
-  toolCall: any;
-  options: Array<{ optionId: string; name: string; kind: string }>;
-  onRespond: (optionId: string, toolCommand?: string, toolName?: string) => void;
-  timestamp: string;
+interface ChatCanvasProps {
+  activeThread: Thread | null;
+  messages: Message[];
+  inputText: string;
+  onChangeInput: (text: string) => void;
+  onSendMessage: () => void;
+  onCancelAgent: () => void;
+  onPermissionResponse: (optionId: string, toolCommand?: string, toolName?: string) => void;
+  onDeploy: () => void;
+  isDeploying: boolean;
+  threadLogs: any[];
+  onClearThreadLogs: () => void;
   workspacePath?: string;
-}) {
-  const [showPatternPicker, setShowPatternPicker] = useState(false);
-  const [selectedPattern, setSelectedPattern] = useState<string | null>(null);
-
-  const command: string =
-    toolCall?.rawInput?.command ??
-    toolCall?.rawInput?.file_path ??
-    toolCall?.rawInput?.path ??
-    "";
-  // Prefer the ACP-provided tool name from metadata.
-  // For execute-kind tools (shell commands), always use "Bash" — never derive
-  // it from the command title, which would produce "cd" for "cd X && cat Y".
-  const toolName: string | undefined =
-    toolCall?._meta?.claudeCode?.toolName ??
-    (toolCall?.kind === "execute" ? "Bash" : undefined) ??
-    (typeof toolCall?.title === "string" ? toolCall.title.split(/\s+/)[0] : undefined);
-  const patternVariants = derivePatternVariants(command, toolCall?.kind, workspacePath);
-
-  function handleStandardOption(optionId: string) {
-    // For allow_always we also pass the command and toolName so the server
-    // scopes the pattern to this specific tool (Bash patterns won't match Write, etc.)
-    onRespond(optionId, optionId === "allow_always" ? command : undefined, toolName);
-  }
-
-  async function handleConfirmSimilar() {
-    if (!selectedPattern) return;
-    // Save the pattern BEFORE unblocking the agent. The agent may immediately
-    // retry the same tool after allow_once — the pattern must already be in
-    // the DB when that next session/request_permission arrives, or it won't
-    // be auto-approved and the user gets a duplicate prompt.
-    try {
-      await fetch("/api/allowedPatterns", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pattern: selectedPattern,
-          toolName,
-          variant: toolCall?.kind ?? "wildcard",
-        }),
-      });
-    } catch (err) {
-      console.error("Failed to save allow-similar pattern:", err);
-      // Still unblock the agent even if the save failed — better to proceed
-      // than to leave the agent permanently blocked.
-    }
-    // Use the allow-once optionId from ACP's actual options list — never hardcode
-    const allowOnceOption = options.find((o) => o.kind === "allow_once");
-    onRespond(allowOnceOption?.optionId ?? "allow");
-    setShowPatternPicker(false);
-  }
-
-  return (
-    <div className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn">
-      <div className="w-8 h-8 bg-amber-500/20 border border-amber-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(245,158,11,0.15)] select-none">
-        <ShieldAlert size={16} className="text-amber-400 animate-pulse" />
-      </div>
-      <div className="flex-1 max-w-[90%]">
-        <div className="border border-amber-500/30 rounded-xl overflow-hidden bg-amber-500/5">
-          {/* Header */}
-          <div className="px-4 py-3 bg-amber-500/10 border-b border-amber-500/20 select-none">
-            <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-400">Permission Required</p>
-            <p className="text-sm text-amber-200 mt-1 font-medium break-all">{toolCall?.title}</p>
-            {toolCall?.kind && (
-              <p className="text-[10px] text-amber-400/60 mt-0.5 font-mono">kind: {toolCall.kind}</p>
-            )}
-          </div>
-
-          {/* Standard ACP options + Allow Similar button */}
-          {!showPatternPicker && (
-            <div className="px-4 py-3 flex flex-wrap gap-2">
-              {(options ?? []).map((opt) => {
-                let btnClass = "px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer active:scale-95 ";
-                if (opt.kind === "allow_always") {
-                  btnClass += "bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30";
-                } else if (opt.kind === "allow_once") {
-                  btnClass += "bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30";
-                } else {
-                  btnClass += "bg-transparent border-white/20 text-slate-300 hover:bg-white/5";
-                }
-                return (
-                  <button key={opt.optionId} className={btnClass} onClick={() => handleStandardOption(opt.optionId)}>
-                    {opt.name}
-                  </button>
-                );
-              })}
-              {/* Only show "Allow Similar" when there are non-exact variants available */}
-              {patternVariants.length > 1 && (
-                <button
-                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer active:scale-95 bg-cyan-500/20 border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/30"
-                  onClick={() => {
-                    setSelectedPattern(patternVariants[1]?.pattern ?? null);
-                    setShowPatternPicker(true);
-                  }}
-                >
-                  Allow Similar…
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Inline pattern picker — shown when user clicks "Allow Similar…" */}
-          {showPatternPicker && (
-            <div className="px-4 py-3 space-y-3">
-              <p className="text-[11px] text-cyan-300 font-mono font-semibold uppercase tracking-wider">
-                Choose which commands to allow automatically:
-              </p>
-              <div className="space-y-1.5">
-                {patternVariants.map((v) => (
-                  <label
-                    key={v.pattern}
-                    className={`flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer transition-colors ${
-                      selectedPattern === v.pattern
-                        ? "border-cyan-500/50 bg-cyan-500/10"
-                        : "border-white/10 bg-white/5 hover:border-white/20"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="pattern"
-                      value={v.pattern}
-                      checked={selectedPattern === v.pattern}
-                      onChange={() => setSelectedPattern(v.pattern)}
-                      className="mt-0.5 accent-cyan-400 shrink-0"
-                    />
-                    <span className="text-xs font-mono text-slate-300 break-all">
-                      {toolName ? <span className="text-cyan-400">{toolName}: </span> : null}{v.label}
-                    </span>
-                  </label>
-                ))}
-              </div>
-              <div className="flex gap-2 pt-1">
-                <button
-                  disabled={!selectedPattern}
-                  onClick={handleConfirmSimilar}
-                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer active:scale-95 bg-cyan-500/20 border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  Confirm &amp; Allow
-                </button>
-                <button
-                  onClick={() => setShowPatternPicker(false)}
-                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
-                >
-                  Back
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+  onToggleMobileNav?: () => void;
 }
+
 
 export default function ChatCanvas({
   activeThread,
@@ -599,16 +362,12 @@ export default function ChatCanvas({
             // 1. User message bubble - responsive
             if (parsed.type === "user") {
               return (
-                <div key={msg.id} className="flex justify-end max-w-4xl mx-auto w-full group animate-fadeIn select-text px-2 sm:px-0">
-                  <div className="max-w-[85%] sm:max-w-[80%] bg-[#18181B] border border-white/5 p-3 sm:p-4 rounded-lg sm:rounded-2xl rounded-tr-none text-xs sm:text-sm">
-                    <p className="leading-relaxed text-slate-200 whitespace-pre-wrap break-words">
-                      {parsed.content}
-                    </p>
-                    <div className="text-[9px] sm:text-[10px] text-slate-500 font-mono mt-2 text-right select-none">
-                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </div>
-                  </div>
-                </div>
+                <UserMessageBubble
+                  key={msg.id}
+                  content={parsed.content}
+                  timestamp={msg.timestamp}
+                  compact={false}
+                />
               );
             }
 
@@ -618,25 +377,12 @@ export default function ChatCanvas({
               if (!textContent) return null;
 
               return (
-                <div key={msg.id} className="flex justify-start gap-2 sm:gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text px-2 sm:px-0">
-                  <div className="w-7 h-7 sm:w-8 sm:h-8 bg-emerald-500/20 border border-emerald-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.15)] select-none">
-                    <Bot size={14} className="text-emerald-400" />
-                  </div>
-                  <div className="flex-1 max-w-[90%] sm:max-w-[90%]">
-                    <div className="bg-[#0E0E11] border border-white/5 p-3 sm:p-5 rounded-lg sm:rounded-2xl rounded-tl-none text-xs sm:text-sm">
-                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-2 mb-3 border-b border-white/5 select-none text-[9px] sm:text-[10px] font-mono tracking-widest text-emerald-400 font-bold gap-1 sm:gap-0">
-                        <span>CLAUDE AI AGENT</span>
-                        <span className="text-slate-500 font-normal whitespace-nowrap">
-                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                      <MarkdownContent content={textContent} />
-                    </div>
-                    <div className="mt-1 flex justify-end">
-                      <CopyButton content={textContent} />
-                    </div>
-                  </div>
-                </div>
+                <AgentTextBubble
+                  key={msg.id}
+                  content={textContent}
+                  timestamp={msg.timestamp}
+                  compact={false}
+                />
               );
             }
 
@@ -645,25 +391,12 @@ export default function ChatCanvas({
               if (!parsed.content) return null;
 
               return (
-                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text">
-                  <div className="w-8 h-8 bg-emerald-500/20 border border-emerald-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.15)] select-none">
-                    <Bot size={16} className="text-emerald-400" />
-                  </div>
-                  <div className="flex-1 max-w-[90%]">
-                    <div className="bg-[#0E0E11] border border-white/5 p-5 rounded-2xl rounded-tl-none">
-                      <div className="flex items-center justify-between pb-2 mb-3 border-b border-white/5 select-none text-[10px] font-mono tracking-widest text-emerald-400 font-bold">
-                        <span>CLAUDE AI AGENT</span>
-                        <span className="text-slate-500 font-normal">
-                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                      <MarkdownContent content={parsed.content} />
-                    </div>
-                    <div className="mt-1 flex justify-end">
-                      <CopyButton content={parsed.content} />
-                    </div>
-                  </div>
-                </div>
+                <AgentChunkBubble
+                  key={msg.id}
+                  content={parsed.content}
+                  timestamp={msg.timestamp}
+                  compact={false}
+                />
               );
             }
 
@@ -700,96 +433,22 @@ export default function ChatCanvas({
               const isCompleted = resultStatus === "completed";
 
               return (
-                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(100,116,139,0.15)] select-none border ${
-                    isFailed
-                      ? "bg-red-500/20 border-red-500/40"
-                      : hasApproval
-                        ? permissionApproved
-                          ? "bg-emerald-500/20 border-emerald-500/40"
-                          : "bg-red-500/20 border-red-500/40"
-                        : "bg-slate-500/20 border-slate-500/40"
-                  }`}>
-                    {isFailed ? (
-                      <XCircle size={16} className="text-red-400" />
-                    ) : hasApproval ? (
-                      permissionApproved ? (
-                        <CheckCircle2 size={16} className="text-emerald-400" />
-                      ) : (
-                        <XCircle size={16} className="text-red-400" />
-                      )
-                    ) : isCompleted ? (
-                      <Terminal size={16} className="text-emerald-400" />
-                    ) : (
-                      <Zap size={16} className="text-slate-400 animate-pulse" />
-                    )}
-                  </div>
-                  <div className="flex-1 max-w-[90%]">
-                    <div className={`border rounded-lg overflow-hidden bg-black/40 ${
-                      isFailed ? "border-red-500/30" : "border-slate-500/20"
-                    }`}>
-                      {/* Tool header / toggle button */}
-                      <button
-                        onClick={() => hasResult ? setExpandedToolId(isExpanded ? null : toolCallId) : undefined}
-                        className={`w-full flex items-center justify-between px-4 py-2 border-b transition-colors select-none text-left ${
-                          isFailed
-                            ? "bg-red-950/40 border-red-500/20 hover:bg-red-950/60 cursor-pointer"
-                            : hasResult
-                              ? "bg-[#0E0E11] border-slate-500/10 hover:bg-slate-900/20 cursor-pointer"
-                              : "bg-[#0E0E11] border-slate-500/10"
-                        }`}
-                        disabled={!hasResult}
-                      >
-                        <div className="flex items-center gap-2 flex-1">
-                          <span className={`text-[10px] font-mono font-bold uppercase tracking-wider break-all ${
-                            isFailed ? "text-red-400" : "text-slate-400"
-                          }`}>
-                            {kind?.toUpperCase() || "TOOL"}: {title || "pending…"}
-                          </span>
-                          {isFailed && (
-                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30">
-                              ✗ Failed
-                            </span>
-                          )}
-                          {!isFailed && hasApproval && (
-                            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
-                              permissionApproved
-                                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                                : "bg-red-500/20 text-red-300 border border-red-500/30"
-                            }`}>
-                              {permissionApproved ? "✓ Approved" : "✗ Rejected"}
-                            </span>
-                          )}
-                          {permissionMsg && (
-                            <span className="text-[10px] text-slate-500 font-mono ml-auto">
-                              {new Date(permissionMsg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </span>
-                          )}
-                        </div>
-                        {hasResult && (
-                          <div className={`text-xs ml-2 ${isFailed ? "text-red-400/70" : "text-slate-500"}`}>
-                            {isExpanded ? "▼ Hide output" : "▶ Show output"}
-                          </div>
-                        )}
-                      </button>
-
-                      {/* Tool output (collapsible, shown if expanded and result exists) */}
-                      {hasResult && isExpanded && resultMsg && (
-                        <div className={`p-3 max-h-60 overflow-y-auto custom-scrollbar ${
-                          isFailed ? "bg-red-950/20" : "bg-black/95"
-                        }`}>
-                          <pre className={`font-mono text-xs whitespace-pre-wrap break-words ${
-                            isFailed ? "text-red-300" : "text-slate-300"
-                          }`}>
-                            {typeof resultMsg.raw?.params?.update?.rawOutput === 'string' 
-                              ? resultMsg.raw.params.update.rawOutput 
-                              : JSON.stringify(resultMsg.raw?.params?.update?.rawOutput, null, 2)}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
+                <ToolPendingBubble
+                  key={msg.id}
+                  toolCallId={toolCallId}
+                  title={title}
+                  kind={kind}
+                  status={status}
+                  timestamp={msg.timestamp}
+                  resultMsg={resultMsg}
+                  resultStatus={resultStatus}
+                  permissionApproved={permissionApproved}
+                  permissionRejected={permissionRejected}
+                  hasApproval={hasApproval}
+                  isExpanded={isExpanded}
+                  onToggleExpand={(id) => setExpandedToolId(expandedToolId === id ? null : id)}
+                  compact={false}
+                />
               );
             }
 
@@ -819,27 +478,14 @@ export default function ChatCanvas({
               const { status, title, kind, rawOutput } = parsed.content;
               
               return (
-                <div key={msg.id} className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text">
-                  <div className="w-8 h-8 bg-emerald-500/20 border border-emerald-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.15)] select-none">
-                    <CheckCircle2 size={16} className="text-emerald-400" />
-                  </div>
-                  <div className="flex-1 max-w-[90%]">
-                    <div className="border border-emerald-500/20 rounded-lg overflow-hidden bg-emerald-500/5">
-                      <div className="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 select-none">
-                        <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-400">
-                          {kind?.toUpperCase() || "TOOL"}: Complete
-                        </span>
-                      </div>
-                      <div className="p-3 bg-black/95 max-h-60 overflow-y-auto custom-scrollbar">
-                        <pre className="font-mono text-xs text-slate-300 whitespace-pre-wrap break-words">
-                          {typeof rawOutput === 'string' 
-                            ? rawOutput 
-                            : JSON.stringify(rawOutput, null, 2)}
-                        </pre>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <ToolResultBubble
+                  key={msg.id}
+                  title={title}
+                  kind={kind}
+                  rawOutput={rawOutput}
+                  timestamp={msg.timestamp}
+                  compact={false}
+                />
               );
             }
 
@@ -944,25 +590,8 @@ export default function ChatCanvas({
       </div>
 
       {/* Floating active status thinking pulse */}
-      {(activeThread.status === "thinking" || activeThread.status === "running" || activeThread.status === "awaiting_permission") && (
-        <div className={`absolute bottom-24 left-1/2 -translate-x-1/2 bg-[#0E0E11] border text-emerald-300 font-mono text-[11px] px-4 py-1.5 rounded-full flex items-center gap-2 shadow-2xl select-none z-10 ${
-          activeThread.status === "awaiting_permission"
-            ? "border-amber-500/30"
-            : "border-emerald-500/20"
-        }`}>
-          <div className={`w-2 h-2 rounded-full shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-ping ${
-            activeThread.status === "awaiting_permission"
-              ? "bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]"
-              : "bg-emerald-500"
-          }`} />
-          <span>
-            {activeThread.status === "awaiting_permission"
-              ? "Awaiting your approval..."
-              : activeThread.status === "running"
-                ? "Claude is executing..."
-                : "Claude is thinking..."}
-          </span>
-        </div>
+      {activeThread.status !== "idle" && (
+        <StatusIndicatorPill status={activeThread.status} />
       )}
 
       {/* Error pill — shows after a failed turn, dismisses on next message */}
@@ -1026,6 +655,3 @@ export default function ChatCanvas({
     </main>
   );
 }
-
-// Export helper functions for use in mobile components
-export { MarkdownContent, getMessageContent, PermissionBubble, ChatCanvas };
