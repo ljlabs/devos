@@ -12,18 +12,18 @@ export function MarkdownContent({ content }: { content: string }) {
   const segments = content.split(/(<thought>[\s\S]*?<\/thought>)/g);
 
   return (
-    <div className="prose prose-invert prose-sm max-w-none break-words
+    <div className="prose prose-invert prose-sm max-w-none break-words overflow-hidden
       prose-headings:text-slate-200 prose-headings:font-semibold
       prose-p:text-slate-300 prose-p:leading-relaxed
       prose-a:text-emerald-400 prose-a:no-underline hover:prose-a:underline
       prose-strong:text-slate-200 prose-strong:font-semibold
       prose-code:text-emerald-400 prose-code:bg-white/5 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:font-mono prose-code:before:content-none prose-code:after:content-none
-      prose-pre:bg-black/60 prose-pre:border prose-pre:border-white/5 prose-pre:rounded-lg
+      prose-pre:bg-black/60 prose-pre:border prose-pre:border-white/5 prose-pre:rounded-lg prose-pre:overflow-x-auto
       prose-lead:text-slate-300
       prose-li:text-slate-300
       prose-td:text-slate-300 prose-th:text-slate-200 prose-th:font-semibold
       prose-thead:border-b prose-thead:border-white/10
-      prose-table:border-collapse prose-td:border prose-td:border-white/5 prose-th:border prose-th:border-white/5
+      prose-table:border-collapse prose-td:border prose-td:border-white/5 prose-th:border prose-th:border-white/5 prose-table:overflow-x-auto
       prose-blockquote:border-emerald-500/30 prose-blockquote:text-slate-400 prose-blockquote:italic
       prose-hr:border-white/10
       prose-img:rounded-lg

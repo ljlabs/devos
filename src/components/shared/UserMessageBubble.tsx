@@ -24,8 +24,8 @@ export function UserMessageBubble({
   if (compact) {
     // Mobile layout
     return (
-      <div className="flex justify-end">
-        <div className="max-w-[85%] bg-[#18181B] border border-white/5 p-2.5 rounded-lg rounded-tr-none text-xs">
+      <div className="flex justify-end min-w-0">
+        <div className="max-w-full bg-[#18181B] border border-white/5 p-2.5 rounded-lg rounded-tr-none text-xs overflow-hidden">
           <p className="leading-relaxed text-slate-200 whitespace-pre-wrap break-words">
             {content}
           </p>

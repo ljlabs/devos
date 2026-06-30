@@ -27,18 +27,18 @@ export function ToolResultBubble({
   if (compact) {
     // Mobile layout
     return (
-      <div className="flex justify-start gap-2">
+      <div className="flex justify-start gap-2 min-w-0">
         <div className="w-6 h-6 bg-emerald-500/20 border border-emerald-500/40 rounded flex items-center justify-center flex-shrink-0 mt-0.5">
           <CheckCircle2 size={12} className="text-emerald-400" />
         </div>
-        <div className="flex-1 max-w-[88%]">
+        <div className="flex-1 min-w-0">
           <div className="border border-emerald-500/20 rounded-lg overflow-hidden bg-emerald-500/5">
             <div className="px-3 py-1.5 bg-emerald-500/10 border-b border-emerald-500/20">
               <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-emerald-400">
                 {kind?.toUpperCase() || "TOOL"}: Complete
               </span>
             </div>
-            <div className="p-2.5 bg-black/95 max-h-48 overflow-y-auto custom-scrollbar">
+            <div className="p-2.5 bg-black/95 max-h-48 overflow-y-auto overflow-x-hidden custom-scrollbar">
               <pre className="font-mono text-[10px] text-slate-300 whitespace-pre-wrap break-words">
                 {typeof rawOutput === "string"
                   ? rawOutput

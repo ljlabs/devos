@@ -71,11 +71,11 @@ export function PermissionBubble({
   }
 
   return (
-    <div className="flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn">
-      <div className="w-8 h-8 bg-amber-500/20 border border-amber-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(245,158,11,0.15)] select-none">
+    <div className="flex justify-start gap-2 min-w-0 sm:gap-4 sm:max-w-4xl sm:mx-auto sm:w-full group animate-fadeIn">
+      <div className="w-6 h-6 sm:w-8 sm:h-8 bg-amber-500/20 border border-amber-500/40 rounded-lg flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(245,158,11,0.15)] select-none">
         <ShieldAlert size={16} className="text-amber-400 animate-pulse" />
       </div>
-      <div className="flex-1 max-w-[90%]">
+      <div className="flex-1 min-w-0 sm:max-w-[90%]">
         <div className="border border-amber-500/30 rounded-xl overflow-hidden bg-amber-500/5">
           {/* Header */}
           <div className="px-4 py-3 bg-amber-500/10 border-b border-amber-500/20 select-none">

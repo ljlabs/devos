@@ -27,16 +27,18 @@ export function AgentChunkBubble({
   if (compact) {
     // Mobile layout
     return (
-      <div className="flex justify-start gap-2">
+      <div className="flex justify-start gap-2 min-w-0">
         <div className="w-6 h-6 bg-emerald-500/20 border border-emerald-500/40 rounded flex items-center justify-center flex-shrink-0 mt-0.5">
           <Bot size={12} className="text-emerald-400" />
         </div>
-        <div className="flex-1 max-w-[88%]">
-          <div className="bg-[#0E0E11] border border-white/5 p-2.5 rounded-lg rounded-tl-none text-xs">
+        <div className="flex-1 min-w-0">
+          <div className="bg-[#0E0E11] border border-white/5 p-2.5 rounded-lg rounded-tl-none text-xs overflow-hidden">
             <div className="text-[9px] font-mono text-emerald-400 pb-1.5 mb-1.5 border-b border-white/5">
               CLAUDE
             </div>
-            <MarkdownContent content={content} />
+            <div className="overflow-x-hidden">
+              <MarkdownContent content={content} />
+            </div>
           </div>
           <div className="mt-1 flex justify-end">
             <CopyButton content={content} />

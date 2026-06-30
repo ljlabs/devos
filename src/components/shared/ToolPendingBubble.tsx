@@ -52,7 +52,7 @@ export function ToolPendingBubble({
   const textSizeClass = compact ? "text-[9px]" : "text-[10px]";
 
   return (
-    <div className={compact ? "flex justify-start gap-2" : "flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text"}>
+    <div className={compact ? "flex justify-start gap-2 min-w-0" : "flex justify-start gap-4 max-w-4xl mx-auto w-full group animate-fadeIn select-text"}>
       <div
         className={`${iconClass} ${borderRadiusClass} flex items-center justify-center flex-shrink-0 shadow-[0_0_15px_rgba(100,116,139,0.15)] select-none border ${
           isFailed
@@ -78,7 +78,7 @@ export function ToolPendingBubble({
           <Zap size={iconSize} className="text-slate-400 animate-pulse" />
         )}
       </div>
-      <div className={compact ? "flex-1 max-w-[88%]" : "flex-1 max-w-[90%]"}>
+      <div className={compact ? "flex-1 min-w-0" : "flex-1 max-w-[90%]"}>
         <div
           className={`border rounded-lg overflow-hidden bg-black/40 ${
             isFailed ? "border-red-500/30" : "border-slate-500/20"
