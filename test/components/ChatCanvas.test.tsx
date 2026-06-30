@@ -782,6 +782,64 @@ describe("ChatCanvas", () => {
     });
   });
 
+  describe("Thinking blocks", () => {
+    it("should render thinking block collapsed by default", () => {
+      const messages: Message[] = [
+        {
+          id: "msg-1",
+          threadId: "t-1",
+          timestamp: "2024-01-01T10:00:00Z",
+          raw: {
+            params: {
+              update: {
+                content: [{ type: "text", text: "<thought>Internal reasoning here</thought>Final response" }],
+              },
+            },
+          },
+          type: "session/update",
+        },
+      ];
+      render(
+        <ChatCanvas {...baseProps} activeThread={sampleThread} messages={messages} />
+      );
+
+      // Header should be visible
+      expect(screen.getByText("Thinking Process")).toBeInTheDocument();
+      // Content should NOT be visible
+      expect(screen.queryByText("Internal reasoning here")).not.toBeInTheDocument();
+      // Final response should be visible
+      expect(screen.getByText("Final response")).toBeInTheDocument();
+    });
+
+    it("should expand thinking block when clicked", async () => {
+      const user = userEvent.setup();
+      const messages: Message[] = [
+        {
+          id: "msg-1",
+          threadId: "t-1",
+          timestamp: "2024-01-01T10:00:00Z",
+          raw: {
+            params: {
+              update: {
+                content: [{ type: "text", text: "<thought>Secret thoughts</thought>Hello!" }],
+              },
+            },
+          },
+          type: "session/update",
+        },
+      ];
+      render(
+        <ChatCanvas {...baseProps} activeThread={sampleThread} messages={messages} />
+      );
+
+      const header = screen.getByText("Thinking Process");
+      await user.click(header);
+
+      // Content should now be visible
+      expect(screen.getByText("Secret thoughts")).toBeInTheDocument();
+    });
+  });
+
   describe("Auto-scroll behavior", () => {
     it("should render without errors with many messages", () => {
       const messages: Message[] = Array.from({ length: 50 }, (_, i) => ({

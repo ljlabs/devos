@@ -37,8 +37,34 @@ import {
 } from "lucide-react";
 import { Message, Thread } from "../types";
 
+/** Renders a collapsible thinking block for agent internal reasoning */
+function ThinkingBlock({ content }: { content: string }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  return (
+    <div className="my-3 border border-emerald-500/20 rounded-lg overflow-hidden bg-emerald-500/5 animate-fadeIn">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center justify-between px-3 py-2 text-xs font-mono text-emerald-400 hover:bg-emerald-500/10 transition-colors select-none group"
+      >
+        <div className="flex items-center gap-2">
+          <Cpu size={14} className="text-emerald-500 group-hover:animate-pulse" />
+          <span className="font-bold uppercase tracking-wider">Thinking Process</span>
+        </div>
+        {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      </button>
+      {isExpanded && (
+        <div className="px-3 py-3 border-t border-emerald-500/20 text-slate-400 text-xs italic leading-relaxed bg-black/20">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Renders markdown content with dark-theme styling for agent bubbles */
 function MarkdownContent({ content }: { content: string }) {
+  const segments = content.split(/(<thought>[\s\S]*?<\/thought>)/g);
+
   return (
     <div className="prose prose-invert prose-sm max-w-none break-words
       prose-headings:text-slate-200 prose-headings:font-semibold
@@ -56,7 +82,13 @@ function MarkdownContent({ content }: { content: string }) {
       prose-hr:border-white/10
       prose-img:rounded-lg
     ">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      {segments.map((segment, i) => {
+        if (segment.startsWith('<thought>') && segment.endsWith('</thought>')) {
+          const thoughtContent = segment.slice(9, -10);
+          return <ThinkingBlock key={i} content={thoughtContent} />;
+        }
+        return <ReactMarkdown key={i} remarkPlugins={[remarkGfm]}>{segment}</ReactMarkdown>;
+      })}
     </div>
   );
 }
