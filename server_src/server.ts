@@ -23,6 +23,7 @@ import { ClaudeAgent } from "./claudeAgent";
 import { DatabaseSchema, Workspace, Thread, Message } from "../src/types";
 import { logInfo, logError, getLogs } from "../src/logger";
 import { SqliteDb } from "./db.sqlite";
+import * as git from "./git";
 
 dotenv.config();
 
@@ -422,6 +423,166 @@ app.patch("/api/workspaces/:workspaceId", (req, res) => {
   if (name) ws.name = name;
   writeDb(db);
   res.json(ws);
+});
+
+// ---------------------------------------------------------------------------
+// Routes — Git
+// ---------------------------------------------------------------------------
+
+/**
+ * Get Git information for a workspace
+ * GET /api/workspaces/:workspaceId/git/info
+ */
+app.get("/api/workspaces/:workspaceId/git/info", async (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const gitInfo = await git.getGitInfo(ws.path);
+    res.json(gitInfo);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message || "Git error" });
+  }
+});
+
+/**
+ * List all branches for a workspace
+ * GET /api/workspaces/:workspaceId/git/branches
+ */
+app.get("/api/workspaces/:workspaceId/git/branches", async (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const branches = await git.listBranches(ws.path);
+    res.json(branches);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message || "Git error" });
+  }
+});
+
+/**
+ * Switch to a branch
+ * POST /api/workspaces/:workspaceId/git/switch-branch
+ * Body: { branchName: string }
+ */
+app.post("/api/workspaces/:workspaceId/git/switch-branch", async (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const { branchName } = req.body;
+    if (!branchName) return res.status(400).json({ error: "branchName required" });
+
+    await git.switchBranch(ws.path, branchName);
+    logInfo("server", `switched to branch ${branchName}`, req.params.workspaceId);
+    res.json({ success: true, message: `Switched to ${branchName}` });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message || "Git error" });
+  }
+});
+
+/**
+ * Stash changes
+ * POST /api/workspaces/:workspaceId/git/stash
+ * Body: { message?: string }
+ */
+app.post("/api/workspaces/:workspaceId/git/stash", async (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const { message } = req.body;
+    const result = await git.stashChanges(ws.path, message);
+    logInfo("server", `stashed changes with message: ${message || "(no message)"}`, req.params.workspaceId);
+    res.json({ success: true, message: result });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message || "Git error" });
+  }
+});
+
+/**
+ * List stashes
+ * GET /api/workspaces/:workspaceId/git/stashes
+ */
+app.get("/api/workspaces/:workspaceId/git/stashes", async (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const stashes = await git.listStashes(ws.path);
+    res.json(stashes);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message || "Git error" });
+  }
+});
+
+/**
+ * Apply a stash
+ * POST /api/workspaces/:workspaceId/git/stash/apply
+ * Body: { stashId: string }
+ */
+app.post("/api/workspaces/:workspaceId/git/stash/apply", async (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const { stashId } = req.body;
+    if (!stashId) return res.status(400).json({ error: "stashId required" });
+
+    const result = await git.applyStash(ws.path, stashId);
+    logInfo("server", `applied stash: ${stashId}`, req.params.workspaceId);
+    res.json({ success: true, message: result });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message || "Git error" });
+  }
+});
+
+/**
+ * Pop a stash (apply and remove)
+ * POST /api/workspaces/:workspaceId/git/stash/pop
+ * Body: { stashId: string }
+ */
+app.post("/api/workspaces/:workspaceId/git/stash/pop", async (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const { stashId } = req.body;
+    if (!stashId) return res.status(400).json({ error: "stashId required" });
+
+    const result = await git.popStash(ws.path, stashId);
+    logInfo("server", `popped stash: ${stashId}`, req.params.workspaceId);
+    res.json({ success: true, message: result });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message || "Git error" });
+  }
+});
+
+/**
+ * Drop a stash
+ * DELETE /api/workspaces/:workspaceId/git/stash/:stashId
+ */
+app.delete("/api/workspaces/:workspaceId/git/stash/:stashId", async (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const { stashId } = req.params;
+    const result = await git.dropStash(ws.path, stashId);
+    logInfo("server", `dropped stash: ${stashId}`, req.params.workspaceId);
+    res.json({ success: true, message: result });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message || "Git error" });
+  }
 });
 
 // ---------------------------------------------------------------------------

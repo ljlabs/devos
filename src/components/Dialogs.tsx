@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from "react";
 import { FolderPlus, X, Settings, Trash2, RefreshCw } from "lucide-react";
 import { Workspace } from "../types";
+import { GitSection } from "./GitSection";
 
 interface WorkspaceModalProps {
   isOpen: boolean;
@@ -32,6 +33,8 @@ export function WorkspaceModal({
   error = "",
   setError = () => {}
 }: WorkspaceModalProps) {
+  const [gitError, setGitError] = useState<string>("");
+
   if (!isOpen) return null;
 
   const isEditing = !!editingWorkspace;
@@ -108,6 +111,27 @@ export function WorkspaceModal({
               />
             </div>
           </div>
+
+          {isEditing && editingWorkspace && (
+            <>
+              <div className="border-t border-white/5 pt-4 mt-4">
+                <h4 className="text-xs font-semibold text-slate-300 mb-3 uppercase tracking-widest">
+                  Git Information
+                </h4>
+                <GitSection
+                  workspacePath={path}
+                  workspaceId={editingWorkspace.id}
+                  onError={setGitError}
+                />
+              </div>
+
+              {gitError && (
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 mt-3">
+                  <p className="text-xs text-amber-300 font-sans">{gitError}</p>
+                </div>
+              )}
+            </>
+          )}
 
           <div className="flex gap-3 pt-4 select-none">
             <button
