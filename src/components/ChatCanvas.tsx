@@ -207,6 +207,7 @@ export default function ChatCanvas({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  
   // Auto-scroll to bottom — only when user is already near the bottom,
   // so scrolling up to read long responses is not disrupted.
   const isNearBottom = () => {
@@ -215,11 +216,26 @@ export default function ChatCanvas({
     return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
   };
 
+  // Scroll to bottom on new messages
   useEffect(() => {
     if (isNearBottom()) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      // Use a small delay to ensure DOM has updated
+      const timeoutId = setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 0);
+      return () => clearTimeout(timeoutId);
     }
   }, [messages]);
+
+  // Also scroll to bottom when thread changes (new chat window opened)
+  useEffect(() => {
+    if (activeThread) {
+      const timeoutId = setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+      }, 0);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [activeThread?.id]);
 
   // Auto-expand textarea as user types, cap at 10 lines (240px)
   const handleTextareaChange = (text: string) => {
