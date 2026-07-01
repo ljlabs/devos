@@ -12,19 +12,22 @@ interface UserMessageBubbleProps {
   content: string;
   timestamp: string | number;
   compact?: boolean; // true for mobile, false for desktop
+  pending?: boolean; // true when waiting for server acknowledgment
 }
 
 export function UserMessageBubble({
   content,
   timestamp,
   compact = false,
+  pending = false,
 }: UserMessageBubbleProps) {
   const ts = typeof timestamp === 'string' ? new Date(timestamp) : new Date(timestamp);
-  
+  const opacityClass = pending ? "opacity-50" : "";
+
   if (compact) {
     // Mobile layout
     return (
-      <div className="flex justify-end min-w-0">
+      <div className={`flex justify-end min-w-0 ${opacityClass}`}>
         <div className="max-w-full bg-[#18181B] border border-white/5 p-2.5 rounded-lg rounded-tr-none text-xs overflow-hidden">
           <p className="leading-relaxed text-slate-200 whitespace-pre-wrap break-words">
             {content}
@@ -42,7 +45,7 @@ export function UserMessageBubble({
 
   // Desktop layout
   return (
-    <div className="flex justify-end max-w-4xl mx-auto w-full group animate-fadeIn select-text px-2 sm:px-0">
+    <div className={`flex justify-end max-w-4xl mx-auto w-full group animate-fadeIn select-text px-2 sm:px-0 ${opacityClass}`}>
       <div className="max-w-[85%] sm:max-w-[80%] bg-[#18181B] border border-white/5 p-3 sm:p-4 rounded-lg sm:rounded-2xl rounded-tr-none text-xs sm:text-sm">
         <p className="leading-relaxed text-slate-200 whitespace-pre-wrap break-words">
           {content}

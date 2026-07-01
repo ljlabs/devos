@@ -3,13 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { History } from "lucide-react";
 import MobileWorkspaceSidebar from "./MobileWorkspaceSidebar";
 import MobileThreadList from "./MobileThreadList";
 import MobileChatCanvas from "./MobileChatCanvas";
 import { WorkspaceModal, SettingsModal } from "./Dialogs";
 import { Workspace, Thread, Message } from "../types";
+import { useWebSocket } from "../hooks/useWebSocket";
+import { useOptimisticMessages } from "../hooks/useOptimisticMessages";
 
 /**
  * Mobile-specific App layout
@@ -23,8 +25,8 @@ export default function MobileApp() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>("");
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string>("");
-  const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState<string>("");
+  const [wsConnected, setWsConnected] = useState(false);
 
   // Mobile-specific navigation state
   const [currentView, setCurrentView] = useState<'workspaces' | 'threads' | 'chat'>('workspaces');
@@ -43,6 +45,51 @@ export default function MobileApp() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Optimistic messages hook
+  const {
+    messages,
+    addOptimistic,
+    confirmMessage,
+    setConfirmed,
+    appendMessage,
+    clearOptimistic,
+  } = useOptimisticMessages();
+
+  // WebSocket event handlers
+  const handleWsMessage = useCallback((msg: Message) => {
+    appendMessage(msg);
+  }, [appendMessage]);
+
+  const handleWsThreadUpdate = useCallback((thread: Thread) => {
+    setThreads((prev) => prev.map((t) => (t.id === thread.id ? thread : t)));
+  }, []);
+
+  const handleWsAck = useCallback((clientMsgId: string, message: Message) => {
+    confirmMessage(clientMsgId, message);
+  }, [confirmMessage]);
+
+  const handleWsSubscribed = useCallback(async (_threadId: string, msgs: Message[], _thread: Thread | null) => {
+    setConfirmed(msgs);
+  }, [setConfirmed]);
+
+  const handleWsConnectionChange = useCallback((connected: boolean) => {
+    setWsConnected(connected);
+  }, []);
+
+  // WebSocket hook
+  const {
+    sendMessage: wsSendMessage,
+    respondToPermission: wsRespond,
+    cancelAgent: wsCancel,
+  } = useWebSocket({
+    threadId: activeThreadId || null,
+    onMessage: handleWsMessage,
+    onThreadUpdate: handleWsThreadUpdate,
+    onAck: handleWsAck,
+    onSubscribed: handleWsSubscribed,
+    onConnectionChange: handleWsConnectionChange,
+  });
+
   // Data fetching
   const fetchWorkspaces = async () => {
     try {
@@ -59,7 +106,7 @@ export default function MobileApp() {
     }
   };
 
-  const fetchThreads = async (workspaceId: string) => {
+  const fetchThreads = useCallback(async (workspaceId: string) => {
     if (!workspaceId) return;
     try {
       const res = await fetch(`/api/workspaces/${workspaceId}/threads`);
@@ -73,26 +120,27 @@ export default function MobileApp() {
           }
         } else {
           setActiveThreadId("");
-          setMessages([]);
+          clearOptimistic();
+          setConfirmed([]);
         }
       }
     } catch (e) {
       console.error("API error fetching threads", e);
     }
-  };
+  }, [activeThreadId, clearOptimistic, setConfirmed]);
 
-  const fetchMessages = async (threadId: string) => {
+  const fetchMessages = useCallback(async (threadId: string) => {
     if (!threadId) return;
     try {
       const res = await fetch(`/api/threads/${threadId}/messages`);
       if (res.ok) {
         const data = await res.json();
-        setMessages(data);
+        setConfirmed(data);
       }
     } catch (e) {
       console.error("API error fetching messages", e);
     }
-  };
+  }, [setConfirmed]);
 
   // Initialize
   useEffect(() => {
@@ -159,31 +207,17 @@ export default function MobileApp() {
     if (activeWorkspaceId) {
       fetchThreads(activeWorkspaceId);
     }
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, fetchThreads]);
 
   // Update messages when thread changes
   useEffect(() => {
+    clearOptimistic();
     if (activeThreadId) {
       fetchMessages(activeThreadId);
     } else {
-      setMessages([]);
+      setConfirmed([]);
     }
-  }, [activeThreadId]);
-
-  // Polling
-  useEffect(() => {
-    const activeThread = threads.find(t => t.id === activeThreadId);
-    const activeThreadStatus = activeThread?.status;
-    const interval = setInterval(() => {
-      if (activeThreadId) {
-        fetchMessages(activeThreadId);
-      }
-      if (activeWorkspaceId) {
-        fetchThreads(activeWorkspaceId);
-      }
-    }, activeThreadStatus === 'awaiting_permission' || activeThreadStatus === 'thinking' ? 1000 : 4000);
-    return () => clearInterval(interval);
-  }, [activeThreadId, activeWorkspaceId, threads]);
+  }, [activeThreadId, fetchMessages, clearOptimistic, setConfirmed]);
 
   const activeThread = threads.find(t => t.id === activeThreadId) || null;
   const activeThreadLogs = activeThreadId ? (threadLogs[activeThreadId] || []) : [];
@@ -260,7 +294,8 @@ export default function MobileApp() {
           const remaining = workspaces.filter(w => w.id !== workspaceId);
           setActiveWorkspaceId(remaining.length > 0 ? remaining[0].id : "");
           setThreads([]);
-          setMessages([]);
+          clearOptimistic();
+          setConfirmed([]);
           setActiveThreadId("");
         }
       }
@@ -310,7 +345,8 @@ export default function MobileApp() {
         setThreads(prev => prev.filter(t => t.id !== threadId));
         if (activeThreadId === threadId) {
           setActiveThreadId("");
-          setMessages([]);
+          clearOptimistic();
+          setConfirmed([]);
         }
       }
     } catch (e) {
@@ -318,57 +354,28 @@ export default function MobileApp() {
     }
   };
 
+  // Send message via WebSocket with optimistic UI
   const handleSendMessage = async () => {
     if (!inputText.trim() || !activeThreadId) return;
 
     const messageText = inputText;
     setInputText("");
 
-    try {
-      const res = await fetch(`/api/threads/${activeThreadId}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: messageText })
-      });
-      if (res.ok) {
-        await fetchMessages(activeThreadId);
-        await fetchThreads(activeWorkspaceId);
-      }
-    } catch (e) {
-      console.error(e);
-    }
+    const clientMsgId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    addOptimistic(activeThreadId, messageText, clientMsgId);
+    wsSendMessage(activeThreadId, messageText, clientMsgId);
   };
 
-  const handlePermissionResponse = async (optionId: string, toolCommand?: string, toolName?: string) => {
+  // Handle permission response via WebSocket
+  const handlePermissionResponse = (optionId: string, toolCommand?: string, toolName?: string) => {
     if (!activeThreadId) return;
-    try {
-      const res = await fetch(`/api/threads/${activeThreadId}/respond`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ optionId, toolCommand, toolName })
-      });
-      if (res.ok) {
-        await fetchMessages(activeThreadId);
-        await fetchThreads(activeWorkspaceId);
-      }
-    } catch (e) {
-      console.error(e);
-    }
+    wsRespond(activeThreadId, optionId, toolCommand, toolName);
   };
 
-  const handleCancelAgent = async () => {
+  // Cancel agent turn via WebSocket
+  const handleCancelAgent = () => {
     if (!activeThreadId) return;
-    try {
-      const res = await fetch(`/api/threads/${activeThreadId}/cancel`, {
-        method: "POST",
-      });
-      if (res.ok) {
-        await fetchMessages(activeThreadId);
-        await fetchThreads(activeWorkspaceId);
-      }
-    } catch (e) {
-      console.error(e);
-    }
+    wsCancel(activeThreadId);
   };
 
   const handleDeploy = () => {
@@ -389,11 +396,11 @@ export default function MobileApp() {
 
   // Mobile view rendering - stacked single-column layout
   return (
-    <div 
-      className="w-screen bg-[#0B0B0C] text-[#e4e2e4] font-sans antialiased overflow-hidden flex flex-col" 
-      style={{ 
+    <div
+      className="w-screen bg-[#0B0B0C] text-[#e4e2e4] font-sans antialiased overflow-hidden flex flex-col"
+      style={{
         height: '100dvh', // Dynamic viewport height accounts for mobile keyboard
-        position: 'fixed', 
+        position: 'fixed',
         inset: 0,
         display: 'flex',
         flexDirection: 'column'

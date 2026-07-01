@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   History
 } from "lucide-react";
@@ -14,6 +14,8 @@ import MobileThreadNavigator from "./components/MobileThreadNavigator";
 import MobileApp from "./components/MobileApp";
 import { WorkspaceModal, SettingsModal } from "./components/Dialogs";
 import { Workspace, Thread, Message } from "./types";
+import { useWebSocket } from "./hooks/useWebSocket";
+import { useOptimisticMessages } from "./hooks/useOptimisticMessages";
 
 export default function App() {
   const [isMobile, setIsMobile] = useState(false);
@@ -23,8 +25,8 @@ export default function App() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>("");
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string>("");
-  const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState<string>("");
+  const [wsConnected, setWsConnected] = useState(false);
 
   // Navigation / views
   const [activeView, setActiveView] = useState<'threads' | 'activity'>('threads');
@@ -47,6 +49,51 @@ export default function App() {
 
   const [isLoading, setIsLoading] = useState(true);
 
+  // Optimistic messages hook
+  const {
+    messages,
+    addOptimistic,
+    confirmMessage,
+    setConfirmed,
+    appendMessage,
+    clearOptimistic,
+  } = useOptimisticMessages();
+
+  // Callbacks for WebSocket events
+  const handleWsMessage = useCallback((msg: Message) => {
+    appendMessage(msg);
+  }, [appendMessage]);
+
+  const handleWsThreadUpdate = useCallback((thread: Thread) => {
+    setThreads((prev) => prev.map((t) => (t.id === thread.id ? thread : t)));
+  }, []);
+
+  const handleWsAck = useCallback((clientMsgId: string, message: Message) => {
+    confirmMessage(clientMsgId, message);
+  }, [confirmMessage]);
+
+  const handleWsSubscribed = useCallback(async (_threadId: string, msgs: Message[], _thread: Thread | null) => {
+    setConfirmed(msgs);
+  }, [setConfirmed]);
+
+  const handleWsConnectionChange = useCallback((connected: boolean) => {
+    setWsConnected(connected);
+  }, []);
+
+  // WebSocket hook
+  const {
+    sendMessage: wsSendMessage,
+    respondToPermission: wsRespond,
+    cancelAgent: wsCancel,
+  } = useWebSocket({
+    threadId: activeThreadId || null,
+    onMessage: handleWsMessage,
+    onThreadUpdate: handleWsThreadUpdate,
+    onAck: handleWsAck,
+    onSubscribed: handleWsSubscribed,
+    onConnectionChange: handleWsConnectionChange,
+  });
+
   // Detect mobile on mount and on resize
   useEffect(() => {
     const checkMobile = () => {
@@ -57,6 +104,7 @@ export default function App() {
     window.addEventListener("resize", checkMobile);
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
+
   // Helper: Load initial database values from Express API
   const fetchWorkspaces = async () => {
     try {
@@ -73,7 +121,7 @@ export default function App() {
     }
   };
 
-  const fetchThreads = async (workspaceId: string) => {
+  const fetchThreads = useCallback(async (workspaceId: string) => {
     if (!workspaceId) return;
     try {
       const res = await fetch(`/api/workspaces/${workspaceId}/threads`);
@@ -87,26 +135,27 @@ export default function App() {
           }
         } else {
           setActiveThreadId("");
-          setMessages([]);
+          clearOptimistic();
+          setConfirmed([]);
         }
       }
     } catch (e) {
       console.error("API error fetching threads", e);
     }
-  };
+  }, [activeThreadId, clearOptimistic, setConfirmed]);
 
-  const fetchMessages = async (threadId: string) => {
+  const fetchMessages = useCallback(async (threadId: string) => {
     if (!threadId) return;
     try {
       const res = await fetch(`/api/threads/${threadId}/messages`);
       if (res.ok) {
         const data = await res.json();
-        setMessages(data);
+        setConfirmed(data);
       }
     } catch (e) {
       console.error("API error fetching messages", e);
     }
-  };
+  }, [setConfirmed]);
 
   // Run on mount
   useEffect(() => {
@@ -173,16 +222,17 @@ export default function App() {
     if (activeWorkspaceId) {
       fetchThreads(activeWorkspaceId);
     }
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, fetchThreads]);
 
   // Update messages when active thread changes
   useEffect(() => {
+    clearOptimistic();
     if (activeThreadId) {
       fetchMessages(activeThreadId);
     } else {
-      setMessages([]);
+      setConfirmed([]);
     }
-  }, [activeThreadId]);
+  }, [activeThreadId, fetchMessages, clearOptimistic, setConfirmed]);
 
   const activeThread = threads.find(t => t.id === activeThreadId) || null;
   const activeThreadStatus = activeThread?.status;
@@ -194,18 +244,8 @@ export default function App() {
     }
   };
 
-  // Polling
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (activeThreadId) {
-        fetchMessages(activeThreadId);
-      }
-      if (activeWorkspaceId) {
-        fetchThreads(activeWorkspaceId);
-      }
-    }, activeThreadStatus === 'awaiting_permission' || activeThreadStatus === 'thinking' ? 1000 : 4000);
-    return () => clearInterval(interval);
-  }, [activeThreadId, activeWorkspaceId, activeThreadStatus]);
+  // No polling needed — WebSocket handles real-time updates.
+  // Fallback: poll only when disconnected (reconnection handles the rest).
 
   // Handle Workspace creation/edit
   const handleWorkspaceSubmit = async (e: React.FormEvent) => {
@@ -329,7 +369,8 @@ export default function App() {
         setThreads(prev => prev.filter(t => t.id !== threadId));
         if (activeThreadId === threadId) {
           setActiveThreadId("");
-          setMessages([]);
+          clearOptimistic();
+          setConfirmed([]);
         }
       }
     } catch (e) {
@@ -347,7 +388,8 @@ export default function App() {
           const remaining = workspaces.filter(w => w.id !== workspaceId);
           setActiveWorkspaceId(remaining.length > 0 ? remaining[0].id : "");
           setThreads([]);
-          setMessages([]);
+          clearOptimistic();
+          setConfirmed([]);
           setActiveThreadId("");
         }
       }
@@ -356,68 +398,28 @@ export default function App() {
     }
   };
 
-  // Send message
+  // Send message via WebSocket with optimistic UI
   const handleSendMessage = async () => {
     if (!inputText.trim() || !activeThreadId) return;
 
     const messageText = inputText;
     setInputText("");
 
-    try {
-      const res = await fetch(`/api/threads/${activeThreadId}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: messageText })
-      });
-      if (res.ok) {
-        await fetchMessages(activeThreadId);
-        await fetchThreads(activeWorkspaceId);
-      }
-    } catch (e) {
-      console.error(e);
-    }
+    const clientMsgId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    addOptimistic(activeThreadId, messageText, clientMsgId);
+    wsSendMessage(activeThreadId, messageText, clientMsgId);
   };
 
-  // Handle permission response from ACP permission request
-  const handlePermissionResponse = async (optionId: string, toolCommand?: string, toolName?: string) => {
+  // Handle permission response via WebSocket
+  const handlePermissionResponse = (optionId: string, toolCommand?: string, toolName?: string) => {
     if (!activeThreadId) return;
-    try {
-      const res = await fetch(`/api/threads/${activeThreadId}/respond`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ optionId, toolCommand, toolName })
-      });
-      if (res.ok) {
-        setGlobalLogs(prev => [
-          `[${new Date().toLocaleTimeString()}] Permission response sent: ${optionId}`,
-          ...prev
-        ]);
-        await fetchMessages(activeThreadId);
-        await fetchThreads(activeWorkspaceId);
-      }
-    } catch (e) {
-      console.error(e);
-    }
+    wsRespond(activeThreadId, optionId, toolCommand, toolName);
   };
 
-  // Cancel agent turn
-  const handleCancelAgent = async () => {
+  // Cancel agent turn via WebSocket
+  const handleCancelAgent = () => {
     if (!activeThreadId) return;
-    try {
-      const res = await fetch(`/api/threads/${activeThreadId}/cancel`, {
-        method: "POST",
-      });
-      if (res.ok) {
-        setGlobalLogs(prev => [
-          `[${new Date().toLocaleTimeString()}] Agent turn cancelled`,
-          ...prev
-        ]);
-        await fetchMessages(activeThreadId);
-        await fetchThreads(activeWorkspaceId);
-      }
-    } catch (e) {
-      console.error(e);
-    }
+    wsCancel(activeThreadId);
   };
 
   // Deploy Cloud Run action simulation

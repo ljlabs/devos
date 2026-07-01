@@ -24,6 +24,7 @@ import { DatabaseSchema, Workspace, Thread, Message } from "../src/types";
 import { logInfo, logError, getLogs } from "../src/logger";
 import { SqliteDb } from "./db.sqlite";
 import * as git from "./git";
+import { initWebSocket, broadcastToThread, broadcastThreadUpdate, broadcastAck, type WsHandlers } from "./wsServer";
 
 dotenv.config();
 
@@ -199,31 +200,38 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
         });
 
         // Record what happened without triggering a permission bubble in UI
+        const autoApprovedMsg: Message = {
+          id: newId("msg-auto"),
+          threadId,
+          timestamp: new Date().toISOString(),
+          type: "permission_response",
+          raw: { autoApproved: true, command: toolCommand, selected: { optionId: "allow" } },
+        };
         updateDb((db) => {
-          db.messages.push({
-            id: newId("msg-auto"),
-            threadId,
-            timestamp: new Date().toISOString(),
-            type: "permission_response",
-            raw: { autoApproved: true, command: toolCommand, selected: { optionId: "allow" } },
-          });
+          db.messages.push(autoApprovedMsg);
           const t = db.threads.find((t) => t.id === threadId);
           if (t) t.status = "thinking";
         });
+
+        broadcastToThread(threadId, autoApprovedMsg);
+        const updatedThread = readDb().threads.find((t) => t.id === threadId);
+        if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
 
         return; // Do NOT fall through to the normal store-and-process path
       }
     }
 
+    // Create the message object outside updateDb so we can broadcast it after
+    const msg: Message = {
+      id: newId("msg"),
+      threadId,
+      timestamp: new Date().toISOString(),
+      raw,
+      type: raw.method ?? (raw.result !== undefined ? "response" : "unknown"),
+    };
+
     updateDb((db) => {
       // Store the raw ACP message verbatim
-      const msg: Message = {
-        id: newId("msg"),
-        threadId,
-        timestamp: new Date().toISOString(),
-        raw,
-        type: raw.method ?? (raw.result !== undefined ? "response" : "unknown"),
-      };
       db.messages.push(msg);
 
       const thread = db.threads.find((t) => t.id === threadId);
@@ -277,6 +285,11 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
         return;
       }
     });
+
+    // Broadcast to WebSocket subscribers after DB write
+    broadcastToThread(threadId, msg);
+    const updatedThread = readDb().threads.find((t) => t.id === threadId);
+    if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
   });
 
   agent.on("close", () => {
@@ -288,6 +301,8 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
         t.pendingPermissionOptions = undefined;
       }
     });
+    const updatedThread = readDb().threads.find((t) => t.id === threadId);
+    if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
   });
 }
 
@@ -718,6 +733,11 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
     }
   });
 
+  // Broadcast to WebSocket subscribers
+  broadcastToThread(threadId, userMsg);
+  const updatedThread = readDb().threads.find((t) => t.id === threadId);
+  if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
+
   res.json(userMsg);
 
   // Async: boot/resume agent and send prompt
@@ -1062,6 +1082,10 @@ app.post("/api/threads/:threadId/respond", async (req, res) => {
     });
   });
 
+  // Broadcast to WebSocket subscribers
+  const updatedThread = readDb().threads.find((t) => t.id === threadId);
+  if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
+
   res.json({ ok: true });
 });
 
@@ -1170,6 +1194,10 @@ app.post("/api/threads/:threadId/cancel", async (req, res) => {
     });
   });
 
+  // Broadcast to WebSocket subscribers
+  const updatedThread = readDb().threads.find((t) => t.id === threadId);
+  if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
+
   res.json({ ok: true });
 });
 
@@ -1245,6 +1273,262 @@ function broadcastGlobalLog(event: any) {
 // Vite / static
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// WebSocket handlers — bridge between WS messages and server logic
+// ---------------------------------------------------------------------------
+
+const wsHandlers: WsHandlers = {
+  sendMessage: (threadId, text, clientMsgId, ws) => {
+    const db = readDb();
+    const thread = db.threads.find((t) => t.id === threadId);
+    if (!thread) {
+      ws.send(JSON.stringify({ type: "error", message: "thread not found", clientMsgId }));
+      return;
+    }
+
+    const workspace = db.workspaces.find((w) => w.id === thread.workspaceId);
+    if (!workspace) {
+      ws.send(JSON.stringify({ type: "error", message: "workspace not found", clientMsgId }));
+      return;
+    }
+
+    const wsPath = workspace.path;
+    if (!fs.existsSync(wsPath)) {
+      ws.send(JSON.stringify({ type: "error", message: `Workspace path no longer exists: ${wsPath}`, clientMsgId }));
+      return;
+    }
+
+    const userMsg: Message = {
+      id: newId("msg-user"),
+      threadId,
+      timestamp: new Date().toISOString(),
+      raw: { role: "user", content: text },
+      type: "user_message",
+    };
+    updateDb((db) => {
+      db.messages.push(userMsg);
+      const t = db.threads.find((t) => t.id === threadId);
+      if (t) {
+        t.status = "thinking";
+        t.lastError = undefined;
+      }
+    });
+
+    // Ack the client that sent the message, and broadcast to ALL subscribers
+    broadcastAck(threadId, clientMsgId, userMsg);
+    broadcastToThread(threadId, userMsg);
+    broadcastThreadUpdate(threadId, { ...thread, status: "thinking", lastError: undefined });
+
+    // Async: boot/resume agent and send prompt
+    (async () => {
+      logInfo("server", `WS async handler started, wsPath=${wsPath}`, threadId);
+      try {
+        const agent = ClaudeAgent.getInstance(threadId, wsPath);
+        wireAgent(agent, threadId);
+
+        const sessionId = await agent.initialize(thread.sessionId);
+        const isResumingSession = thread.sessionId === sessionId && thread.sessionId !== undefined;
+
+        updateDb((db) => {
+          const t = db.threads.find((t) => t.id === threadId);
+          if (t) {
+            if (!t.sessionId) {
+              t.sessionId = sessionId;
+            }
+            if (isResumingSession) {
+              console.log(`[server] Resumed existing session ${sessionId} for thread ${threadId}`);
+            } else {
+              console.log(`[server] Created new session ${sessionId} for thread ${threadId}`);
+            }
+          }
+        });
+
+        if (cancelPending.has(threadId)) {
+          cancelPending.delete(threadId);
+          agent.markSessionReady();
+          logInfo("server", `cancel was pending after initialize, aborting turn`, threadId);
+          agent.cancel(sessionId);
+          updateDb((db) => {
+            const t = db.threads.find((t) => t.id === threadId);
+            if (t) {
+              t.status = "idle";
+              t.pendingPermissionId = undefined;
+              t.pendingPermissionOptions = undefined;
+            }
+            db.messages.push({
+              id: newId("msg-cancel"),
+              threadId,
+              timestamp: new Date().toISOString(),
+              type: "system",
+              raw: { text: "Agent turn cancelled by user" },
+            });
+          });
+          return;
+        }
+
+        agent.markSessionReady();
+        logInfo("server", `sending session/prompt...`, threadId);
+        await agent.rpc("session/prompt", {
+          sessionId,
+          prompt: [{ type: "text", text }],
+        });
+        logInfo("server", `session/prompt completed`, threadId);
+
+        updateDb((db) => {
+          const t = db.threads.find((t) => t.id === threadId);
+          if (t) t.status = "idle";
+        });
+        const updatedThread = readDb().threads.find((t) => t.id === threadId);
+        if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
+      } catch (err: any) {
+        updateDb((db) => {
+          db.messages.push({
+            id: newId("msg-err"),
+            threadId,
+            timestamp: new Date().toISOString(),
+            raw: { error: err.message },
+            type: "error",
+          });
+          const t = db.threads.find((t) => t.id === threadId);
+          if (t) t.status = "idle";
+        });
+        const updatedThread = readDb().threads.find((t) => t.id === threadId);
+        if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
+      }
+    })();
+  },
+
+  respond: (threadId, optionId, toolCommand, toolName) => {
+    if (optionId === "allow_similar") return;
+
+    const db = readDb();
+    const thread = db.threads.find((t) => t.id === threadId);
+    if (!thread || thread.pendingPermissionId === undefined) return;
+
+    if (optionId === "allow_always" && toolCommand) {
+      updateDb((db) => {
+        db.allowedPatterns = db.allowedPatterns || [];
+        const exists = (db.allowedPatterns as any[]).some(
+          (p: any) => (p.pattern || p) === toolCommand && p.toolName === (toolName ?? undefined)
+        );
+        if (!exists) {
+          const kind = toolName
+            ? (["Write", "Edit", "MultiEdit", "Read"].includes(toolName) ? toolName.toLowerCase() : "execute")
+            : "exact";
+          (db.allowedPatterns as any[]).push({
+            pattern: toolCommand,
+            variant: kind,
+            toolName: toolName ?? undefined,
+            createdAt: new Date().toISOString(),
+          });
+        }
+      });
+    }
+
+    const workspace = db.workspaces.find((w) => w.id === thread.workspaceId);
+    const wsPath = workspace?.path || thread.workspaceId;
+    const agent = ClaudeAgent.getInstance(threadId, wsPath);
+    wireAgent(agent, threadId);
+
+    agent.send({
+      jsonrpc: "2.0",
+      id: thread.pendingPermissionId,
+      result: { outcome: { outcome: "selected", optionId } },
+    });
+
+    updateDb((db) => {
+      const t = db.threads.find((t) => t.id === threadId);
+      if (t) {
+        t.status = "thinking";
+        t.pendingPermissionId = undefined;
+        t.pendingPermissionOptions = undefined;
+      }
+      db.messages.push({
+        id: newId("msg-perm"),
+        threadId,
+        timestamp: new Date().toISOString(),
+        type: "permission_response",
+        raw: { selected: { optionId } },
+      });
+    });
+
+    const updatedThread = readDb().threads.find((t) => t.id === threadId);
+    if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
+  },
+
+  cancel: (threadId) => {
+    logInfo("server", "WS cancel requested", threadId);
+    cancelPending.add(threadId);
+
+    const db = readDb();
+    const thread = db.threads.find((t) => t.id === threadId);
+    if (!thread) return;
+
+    if (!thread.sessionId) {
+      updateDb((db) => {
+        const t = db.threads.find((t) => t.id === threadId);
+        if (t) t.status = "idle";
+      });
+      const updatedThread = readDb().threads.find((t) => t.id === threadId);
+      if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
+      return;
+    }
+
+    const workspace = db.workspaces.find((w) => w.id === thread.workspaceId);
+    const wsPath = workspace?.path || thread.workspaceId;
+    const agent = ClaudeAgent.getInstance(threadId, wsPath);
+    wireAgent(agent, threadId);
+
+    if (thread.pendingPermissionId !== undefined) {
+      agent.send({
+        jsonrpc: "2.0",
+        id: thread.pendingPermissionId,
+        result: { outcome: { outcome: "cancelled" } },
+      });
+      updateDb((db) => {
+        const t = db.threads.find((t) => t.id === threadId);
+        if (t) {
+          t.pendingPermissionId = undefined;
+          t.pendingPermissionOptions = undefined;
+        }
+        db.messages.push({
+          id: newId("msg-cancel-perm"),
+          threadId,
+          timestamp: new Date().toISOString(),
+          type: "permission_response",
+          raw: { selected: { optionId: "deny" } },
+        });
+      });
+    }
+
+    cancelPending.delete(threadId);
+    agent.cancel(thread.sessionId);
+
+    updateDb((db) => {
+      const t = db.threads.find((t) => t.id === threadId);
+      if (t) {
+        t.status = "idle";
+        t.pendingPermissionId = undefined;
+        t.pendingPermissionOptions = undefined;
+      }
+      db.messages.push({
+        id: newId("msg-cancel"),
+        threadId,
+        timestamp: new Date().toISOString(),
+        type: "system",
+        raw: { text: "Agent turn cancelled by user" },
+      });
+    });
+
+    const updatedThread = readDb().threads.find((t) => t.id === threadId);
+    if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Vite / static
+// ---------------------------------------------------------------------------
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
@@ -1255,7 +1539,10 @@ async function startServer() {
     app.get("*", (_req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
-  app.listen(PORT, HOST, () => console.log(`Server on http://${HOST}:${PORT}`));
+  const httpServer = app.listen(PORT, HOST, () => {
+    console.log(`Server on http://${HOST}:${PORT}`);
+    initWebSocket(httpServer, readDb, newId, wsHandlers);
+  });
 }
 
 // Don't auto-start the HTTP server (or boot Vite) when imported by tests.

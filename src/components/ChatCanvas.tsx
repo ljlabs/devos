@@ -383,6 +383,7 @@ export default function ChatCanvas({
                   content={parsed.content}
                   timestamp={msg.timestamp}
                   compact={false}
+                  pending={msg.pending}
                 />
               );
             }

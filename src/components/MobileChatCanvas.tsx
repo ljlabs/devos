@@ -183,6 +183,7 @@ export default function MobileChatCanvas({
                   content={parsed.content}
                   timestamp={msg.timestamp}
                   compact={true}
+                  pending={msg.pending}
                 />
               );
             }

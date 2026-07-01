@@ -43,12 +43,15 @@ export interface Message {
   id: string;
   threadId: string;
   timestamp: string;
-  
+
   // The raw, unmodified ACP message (JSON-RPC request/response/notification)
   raw: any;
-  
+
   // Convenience field: the ACP method or message type
   type?: ACPMessageMethod | 'response' | 'unknown';
+
+  // Client-side only: true while waiting for server acknowledgment
+  pending?: boolean;
 }
 
 /**
