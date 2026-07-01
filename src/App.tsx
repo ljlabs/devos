@@ -11,25 +11,29 @@ import {
 import WorkspaceSidebar from "./components/WorkspaceSidebar";
 import ThreadList from "./components/ThreadList";
 import ChatCanvas from "./components/ChatCanvas";
+import WorkspaceIdeView from "./components/WorkspaceIdeView";
 import MobileThreadNavigator from "./components/MobileThreadNavigator";
-import MobileApp from "./components/MobileApp";
 import { WorkspaceModal, SettingsModal } from "./components/Dialogs";
 import { Workspace, Thread, Message } from "./types";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useOptimisticMessages } from "./hooks/useOptimisticMessages";
 
-// The inner app component that uses URL params for routing
+// Inner app component that uses URL params for routing
 function MessagesView() {
   const { workspaceId, threadId } = useParams<{ workspaceId?: string; threadId?: string }>();
   const navigate = useNavigate();
-  const [isMobile, setIsMobile] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
 
+  // Desktop state (always declared, even on mobile)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const activeWorkspaceId = workspaceId || "";
   const [threads, setThreads] = useState<Thread[]>([]);
+  const activeThreadId = threadId || "";
   const [inputText, setInputText] = useState<string>("");
   const [wsConnected, setWsConnected] = useState(false);
 
-  const [activeView, setActiveView] = useState<'threads' | 'activity'>('threads');
+  // Navigation / views
+  const [activeView, setActiveView] = useState<'threads' | 'activity' | 'ide'>('threads');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showThreadListOnMobile, setShowThreadListOnMobile] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
@@ -46,9 +50,6 @@ function MessagesView() {
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-
-  const activeWorkspaceId = workspaceId || "";
-  const activeThreadId = threadId || "";
 
   const {
     messages,
@@ -360,9 +361,9 @@ function MessagesView() {
     try {
       const res = await fetch(`/api/workspaces/${wsId}`, { method: "DELETE" });
       if (res.ok) {
-        const remaining = workspaces.filter(w => w.id !== wsId);
-        setWorkspaces(remaining);
+        setWorkspaces(prev => prev.filter(w => w.id !== wsId));
         if (activeWorkspaceId === wsId) {
+          const remaining = workspaces.filter(w => w.id !== wsId);
           setThreads([]);
           clearOptimistic();
           setConfirmed([]);
@@ -417,7 +418,8 @@ function MessagesView() {
   };
 
   if (isMobile) {
-    return <MobileApp />;
+    // Mobile routes are handled by ResponsiveRoute wrapper in App() router
+    return null;
   }
 
   return (
@@ -459,8 +461,8 @@ function MessagesView() {
         />
       )}
 
-      {activeView === 'threads' && (
-        <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+      {/* DESKTOP VIEW: Show activeView-based content */}
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
           <div className="hidden md:flex md:w-64">
             <ThreadList
               threads={threads}
@@ -490,25 +492,24 @@ function MessagesView() {
             />
           </div>
         </div>
-      )}
 
-      {activeView === 'activity' && (
-        <main className="flex-1 flex flex-col bg-[#0B0B0C] overflow-hidden p-4 md:p-8 animate-fadeIn">
-          <div className="max-w-4xl w-full mx-auto space-y-4 md:space-y-6 flex flex-col h-full">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4 select-none pb-4 border-b border-white/5 justify-between shrink-0">
-              <div className="flex items-center gap-2">
-                <History className="text-emerald-400 flex-shrink-0" size={20} />
-                <h2 className="font-sans font-bold text-base sm:text-lg md:text-xl text-white truncate">Global DevOS Activity Audit Trail</h2>
+        {activeView === 'activity' && (
+          <main className="flex-1 flex flex-col bg-[#0B0B0C] overflow-hidden p-4 md:p-8 animate-fadeIn">
+            <div className="max-w-4xl w-full mx-auto space-y-4 md:space-y-6 flex flex-col h-full">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4 select-none pb-4 border-b border-white/5 justify-between shrink-0">
+                <div className="flex items-center gap-2">
+                  <History className="text-emerald-400 flex-shrink-0" size={20} />
+                  <h2 className="font-sans font-bold text-base sm:text-lg md:text-xl text-white truncate">Global DevOS Activity Audit Trail</h2>
+                </div>
+                <button
+                  onClick={() => setGlobalLogs([])}
+                  className="text-xs text-rose-400 hover:text-rose-300 hover:underline cursor-pointer whitespace-nowrap"
+                >
+                  Clear Log History
+                </button>
               </div>
-              <button
-                onClick={() => setGlobalLogs([])}
-                className="text-xs text-rose-400 hover:text-rose-300 hover:underline cursor-pointer whitespace-nowrap"
-              >
-                Clear Log History
-              </button>
-            </div>
 
-            <div className="flex-1 bg-black/40 rounded-lg md:rounded-xl border border-white/5 p-4 md:p-6 font-mono text-xs text-slate-400 space-y-2 overflow-y-auto custom-scrollbar shadow-2xl">
+              <div className="flex-1 bg-black/40 rounded-lg md:rounded-xl border border-white/5 p-4 md:p-6 font-mono text-xs text-slate-400 space-y-2 overflow-y-auto custom-scrollbar shadow-2xl">
               {globalLogs.length === 0 ? (
                 <p className="text-slate-600 italic text-center py-12 font-sans">No diagnostic activities logged in current session.</p>
               ) : (
@@ -524,6 +525,18 @@ function MessagesView() {
         </main>
       )}
 
+      {/* IDE VIEW PANEL */}
+      {activeView === 'ide' && (
+        <div className="flex-1 overflow-hidden">
+          <WorkspaceIdeView
+            workspaceId={activeWorkspaceId}
+            workspacePath={workspaces.find(w => w.id === activeWorkspaceId)?.path}
+            onClose={() => setActiveView('threads')}
+          />
+        </div>
+      )}
+
+      {/* --- MODAL DIALOGS --- */}
       <WorkspaceModal
         isOpen={showWorkspaceModal}
         onClose={() => {
@@ -548,12 +561,22 @@ function MessagesView() {
   );
 }
 
+import WorkspacesPage from "./pages/WorkspacesPage";
+import ThreadsPage from "./pages/ThreadsPage";
+import ChatPage from "./pages/ChatPage";
+
+/** Renders mobile or desktop layout based on screen width. */
+function ResponsiveRoute({ mobile, desktop }: { mobile: React.ReactNode; desktop: React.ReactNode }) {
+  const isMobile = window.innerWidth < 768;
+  return <>{isMobile ? mobile : desktop}</>;
+}
+
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<MessagesView />} />
-      <Route path="/messages/:workspaceId" element={<MessagesView />} />
-      <Route path="/messages/:workspaceId/:threadId" element={<MessagesView />} />
+      <Route path="/" element={<ResponsiveRoute mobile={<WorkspacesPage />} desktop={<MessagesView />} />} />
+      <Route path="/messages/:workspaceId" element={<ResponsiveRoute mobile={<ThreadsPage />} desktop={<MessagesView />} />} />
+      <Route path="/messages/:workspaceId/:threadId" element={<ResponsiveRoute mobile={<ChatPage />} desktop={<MessagesView />} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

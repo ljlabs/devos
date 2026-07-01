@@ -24,6 +24,7 @@ import { DatabaseSchema, Workspace, Thread, Message } from "../src/types";
 import { logInfo, logError, getLogs } from "../src/logger";
 import { SqliteDb } from "./db.sqlite";
 import * as git from "./git";
+import { listDirectory, readFile, writeFile } from "./files";
 import { initWebSocket, broadcastToThread, broadcastThreadUpdate, broadcastAck, type WsHandlers } from "./wsServer";
 
 dotenv.config();
@@ -438,6 +439,98 @@ app.patch("/api/workspaces/:workspaceId", (req, res) => {
   if (name) ws.name = name;
   writeDb(db);
   res.json(ws);
+});
+
+// ---------------------------------------------------------------------------
+// Routes — File Explorer
+// ---------------------------------------------------------------------------
+
+/**
+ * List directory contents for a workspace
+ * GET /api/workspaces/:workspaceId/files?path=<relative>
+ */
+app.get("/api/workspaces/:workspaceId/files", (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const relativePath = (req.query.path as string) || undefined;
+    const entries = listDirectory(ws.path, relativePath);
+
+    res.json({
+      entries,
+      currentPath: relativePath ?? "",
+    });
+  } catch (e: any) {
+    if (e.message.includes("traversal")) {
+      return res.status(400).json({ error: e.message });
+    }
+    if (e.message.includes("not found") || e.message.includes("Not a directory")) {
+      return res.status(404).json({ error: e.message });
+    }
+    res.status(500).json({ error: e.message || "Internal server error" });
+  }
+});
+
+/**
+ * Read file content from a workspace
+ * GET /api/workspaces/:workspaceId/files/read?path=<relative>
+ */
+app.get("/api/workspaces/:workspaceId/files/read", (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const relativePath = req.query.path as string;
+    if (!relativePath) {
+      return res.status(400).json({ error: "path query parameter required" });
+    }
+
+    const fileContent = readFile(ws.path, relativePath);
+    res.json(fileContent);
+  } catch (e: any) {
+    if (e.message.includes("traversal")) {
+      return res.status(400).json({ error: e.message });
+    }
+    if (e.message.includes("not found") || e.message.includes("Not a file")) {
+      return res.status(404).json({ error: e.message });
+    }
+    res.status(500).json({ error: e.message || "Internal server error" });
+  }
+});
+
+/**
+ * Write file content to a workspace
+ * PUT /api/workspaces/:workspaceId/files/write
+ * Body: { path: string, content: string }
+ */
+app.put("/api/workspaces/:workspaceId/files/write", (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const { path: relativePath, content } = req.body;
+
+    if (!relativePath || typeof relativePath !== "string") {
+      return res.status(400).json({ error: "path (string) required" });
+    }
+
+    if (content === undefined || content === null || typeof content !== "string") {
+      return res.status(400).json({ error: "content (string) required" });
+    }
+
+    const result = writeFile(ws.path, relativePath, content);
+    logInfo("server", `File written: ${relativePath} (${result.size} bytes, ${result.lines} lines)`, req.params.workspaceId);
+    res.json(result);
+  } catch (e: any) {
+    if (e.message.includes("traversal")) {
+      return res.status(400).json({ error: e.message });
+    }
+    res.status(500).json({ error: e.message || "Internal server error" });
+  }
 });
 
 // ---------------------------------------------------------------------------

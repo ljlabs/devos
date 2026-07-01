@@ -14,7 +14,8 @@ import {
   Settings,
   FileText,
   HelpCircle,
-  Menu
+  Menu,
+  Code
 } from "lucide-react";
 import { Workspace } from "../types";
 
@@ -25,8 +26,8 @@ interface WorkspaceSidebarProps {
   onOpenNewWorkspace: () => void;
   onEditWorkspace: (id: string) => void;
   onDeleteWorkspace: (id: string) => void;
-  activeView: 'threads' | 'activity';
-  onSelectView: (view: 'threads' | 'activity') => void;
+  activeView: 'threads' | 'activity' | 'ide';
+  onSelectView: (view: 'threads' | 'activity' | 'ide') => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
   onOpenSettings: () => void;
@@ -155,6 +156,18 @@ export default function WorkspaceSidebar({
             >
               <History size={16} className={activeView === 'activity' ? "text-emerald-400" : "text-slate-500"} />
               {!collapsed && <span className="text-sm font-sans">Global Logs</span>}
+            </button>
+
+            <button
+              onClick={() => onSelectView('ide')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all ${
+                activeView === 'ide' 
+                  ? "bg-emerald-500/5 border border-emerald-500/20 text-white font-medium" 
+                  : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+              }`}
+            >
+              <Code size={16} className={activeView === 'ide' ? "text-emerald-400" : "text-slate-500"} />
+              {!collapsed && <span className="text-sm font-sans">IDE</span>}
             </button>
 
           </nav>

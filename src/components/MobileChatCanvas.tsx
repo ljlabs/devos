@@ -107,7 +107,7 @@ export default function MobileChatCanvas({
   return (
     <div
       className="flex flex-col bg-[#0B0B0C] overflow-hidden"
-      style={{ position: 'fixed', inset: 0 }}
+      style={{ position: 'fixed', inset: '0 0 56px 0' }}
     >
       {/* Header */}
       <header className="flex-shrink-0 h-14 flex items-center justify-between px-3 border-b border-white/5 bg-[#0E0E11]/80 gap-2">

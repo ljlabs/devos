@@ -74,7 +74,35 @@ export interface DatabaseSchema {
   workspaces: Workspace[];
   threads: Thread[];
   messages: Message[];
-  
+
   // New: Per-workspace "allow similar" patterns with variants
-  allowedPatterns?: AllowSimilarPattern[]; 
+  allowedPatterns?: AllowSimilarPattern[];
+}
+
+// ---------------------------------------------------------------------------
+// File Explorer / IDE types
+// ---------------------------------------------------------------------------
+
+export type IdePanel = "chat" | "files" | "editor" | "terminal";
+
+/**
+ * File or directory entry returned by the file explorer API.
+ */
+export interface FileEntry {
+  name: string;
+  path: string;       // relative to workspace root (forward slashes)
+  type: "file" | "directory";
+  size?: number;       // bytes, only for files
+  modified?: string;   // ISO timestamp
+}
+
+/**
+ * File content returned by the file read API.
+ */
+export interface FileContent {
+  path: string;
+  content: string;
+  size: number;
+  lines: number;
+  truncated?: boolean;
 }

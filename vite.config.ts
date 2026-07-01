@@ -11,6 +11,9 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    optimizeDeps: {
+      include: ['monaco-editor'],
+    },
     server: {
       host: process.env.HOST || '127.0.0.1',
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
