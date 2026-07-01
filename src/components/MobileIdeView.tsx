@@ -156,7 +156,7 @@ export default function MobileIdeView({
   return (
     <div className="flex flex-col h-full bg-[#0B0B0C]">
       {/* Panel header */}
-      <div className="flex items-center gap-3 px-3 h-12 border-b border-white/5 bg-[#0E0E11]">
+      <div className="flex items-center gap-3 px-3 h-12 border-b border-white/5 bg-[#0E0E11] flex-shrink-0">
         <button
           onClick={onBack}
           className="p-1.5 rounded-md hover:bg-white/5 text-slate-400 hover:text-white transition-colors"

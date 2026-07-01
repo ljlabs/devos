@@ -84,9 +84,15 @@ export default function TerminalDisplay({
   const ctrlModifierRef = useRef(false);
   const altModifierRef = useRef(false);
   const [isConnected, setIsConnected] = useState(false);
+  const fitTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const touchStateRef = useRef({ startY: 0, lastY: 0 });
 
   // Cleanup function
   const cleanup = useCallback(() => {
+    if (fitTimeoutRef.current) {
+      clearTimeout(fitTimeoutRef.current);
+      fitTimeoutRef.current = null;
+    }
     if (wsRef.current) {
       try {
         wsRef.current.send(
@@ -129,10 +135,21 @@ export default function TerminalDisplay({
     // Open terminal in container
     term.open(container);
 
-    // Delay fit to let the container render
-    requestAnimationFrame(() => {
-      try { fitAddon.fit(); } catch {}
-    });
+    // Delay fit to let the container fully render + calculate layout
+    // Use setTimeout for more reliable layout calculation than requestAnimationFrame
+    fitTimeoutRef.current = setTimeout(() => {
+      try {
+        fitAddon.fit();
+        // Verify dimensions were calculated; fallback if needed
+        const dims = fitAddon.proposeDimensions();
+        if (!dims || dims.cols < 40 || dims.rows < 10) {
+          // Container height still unmeasured; use terminal's current size
+          console.warn("FitAddon dimensions too small, using terminal defaults");
+        }
+      } catch (e) {
+        console.warn("Initial fit failed:", e);
+      }
+    }, 100);
 
     // WebSocket connection
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -211,10 +228,40 @@ export default function TerminalDisplay({
     });
     resizeObserver.observe(container);
 
+    // Manual touch scroll fallback for mobile
+    // xterm.js sets touch-action: none on the parent, which blocks native scroll
+    // This captures touch drag and converts it to scrollLines() calls
+    const onTouchStart = (e: TouchEvent) => {
+      touchStateRef.current.startY = e.touches[0].clientY;
+      touchStateRef.current.lastY = e.touches[0].clientY;
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      const currentY = e.touches[0].clientY;
+      const deltaY = touchStateRef.current.lastY - currentY;
+      
+      // Line height in pixels (tune this to match your font size + line spacing)
+      // fontSize: 13 with default line-height typically gives ~18-20px per row
+      const lineHeight = 20;
+      
+      if (Math.abs(deltaY) >= lineHeight) {
+        const lines = Math.trunc(deltaY / lineHeight);
+        if (lines !== 0) {
+          term.scrollLines(lines);
+          touchStateRef.current.lastY = currentY;
+        }
+      }
+    };
+
+    container.addEventListener("touchstart", onTouchStart, { passive: true });
+    container.addEventListener("touchmove", onTouchMove, { passive: true });
+
     // Cleanup on unmount
     return () => {
       disposable.dispose();
       resizeObserver.disconnect();
+      container.removeEventListener("touchstart", onTouchStart);
+      container.removeEventListener("touchmove", onTouchMove);
       cleanup();
     };
   }, [cleanup]);
@@ -248,7 +295,7 @@ export default function TerminalDisplay({
   return (
     <div className="flex flex-col h-full bg-[#0B0B0C]">
       {/* Terminal header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-white/5 bg-[#16161A]">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-white/5 bg-[#16161A] flex-shrink-0">
         <div className="flex items-center gap-2">
           <Terminal size={16} className={isConnected ? "text-emerald-400" : "text-slate-500"} />
           <span className="text-[10px] font-mono font-bold tracking-widest text-slate-500 uppercase">
@@ -276,7 +323,7 @@ export default function TerminalDisplay({
       />
 
       {/* Virtual keyboard toolbar (mobile) */}
-      <div className="bg-[#16161A] border-t border-white/5 flex items-center justify-around px-2 py-1.5">
+      <div className="bg-[#16161A] border-t border-white/5 flex items-center justify-around px-2 py-1.5 flex-shrink-0">
         {VIRTUAL_KEYS.map((key) => {
           const isModifier =
             (key.label === "CTRL" && ctrlModifierRef.current) ||
