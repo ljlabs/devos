@@ -83,6 +83,10 @@ export default function TerminalDisplay({
     `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   );
 
+  // Debounce duplicate submissions and phantom keystrokes
+  const lastSubmitTimeRef = useRef(0);
+  const lastDataRef = useRef<string>("");
+
   // Modifier state (for UI rendering)
   const [ctrlArmed, setCtrlArmed] = useState(false);
   const [altArmed, setAltArmed] = useState(false);
@@ -271,37 +275,49 @@ export default function TerminalDisplay({
 
     // --- CENTRALIZED INPUT HANDLING ---
     // --- 1. NORMAL TYPING HANDLER ---
-    // Handles physical keyboard inputs and finalized mobile text.
-    // Physical Ctrl+C, etc., are natively handled by xterm and arrive here perfectly.
     const disposable = term.onData((data: string) => {
-      // If a virtual modifier is armed, we completely ignore onData because 
-      // the beforeinput listener (below) will handle it instead.
       const hasModifier = ctrlArmedRef.current || altArmedRef.current || shiftArmedRef.current;
       if (hasModifier) return;
 
+      const now = Date.now();
+      
+      // 1. Block exact duplicate submissions within 50ms (mobile IME burst fix)
+      if (data === lastDataRef.current && now - lastSubmitTimeRef.current < 50) {
+        return;
+      }
+
+      // 2. Phantom keystroke fix:
+      // Some browsers insert the literal key (e.g., "c") into the textarea 
+      // after a prevented Ctrl+key (e.g., Ctrl+C) event. This results in 
+      // the shell receiving the control character, followed by the literal character.
+      const isControlChar = (d: string) => d.length === 1 && d.charCodeAt(0) < 32;
+      const isPrintableChar = (d: string) => d.length === 1 && d.charCodeAt(0) >= 32;
+
+      if (isControlChar(lastDataRef.current) && isPrintableChar(data)) {
+        if (now - lastSubmitTimeRef.current < 150) {
+          console.log(`Dropped phantom keystroke: "${data}" following "${lastDataRef.current}"`);
+          lastDataRef.current = data; // Update so we don't drop the NEXT legitimate keystroke
+          return;
+        }
+      }
+
+      lastSubmitTimeRef.current = now;
+      lastDataRef.current = data;
       sendToShell(data, "onData");
     });
 
     // --- 2. VIRTUAL MODIFIER INTERCEPTOR (THE FIX) ---
-    // Mobile keyboards buffer keystrokes. If the user arms Virtual CTRL and types 'c', 
-    // it gets trapped in the buffer. 'beforeinput' fires instantly, allowing us to 
-    // hijack the keystroke before the mobile keyboard buffers it.
     const handleBeforeInput = (e: InputEvent) => {
       const hasModifier = ctrlArmedRef.current || altArmedRef.current || shiftArmedRef.current;
       
-      // If no virtual modifiers are armed, do absolutely nothing. 
-      // Let the browser and xterm process normal typing normally.
       if (!hasModifier || !e.data) return;
 
-      // A modifier IS armed! We must hijack this specific keystroke.
       e.preventDefault();
       e.stopPropagation();
 
       const firstChar = e.data[e.data.length-1];
       let mapped = firstChar;
 
-
-      // Apply modifiers to the intercepted character
       if (ctrlArmedRef.current) {
         if (/^[a-zA-Z]$/.test(firstChar)) {
           mapped = String.fromCharCode(firstChar.toLowerCase().charCodeAt(0) - 96);
@@ -333,7 +349,6 @@ export default function TerminalDisplay({
       clearAllModifiers();
     };
 
-    // We use capture: true so we grab the event before xterm's hidden textarea gets it
     container.addEventListener("beforeinput", handleBeforeInput as EventListener, { capture: true });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -371,12 +386,9 @@ export default function TerminalDisplay({
       }
     };
     
-    // We attach passive listeners so they don't break scroll behavior
     container.addEventListener("touchstart", onTouchStart, { passive: true });
     container.addEventListener("touchmove", onTouchMove, { passive: true });
 
-    // 2. Strict Cleanup Function closures over local variables (term, ws, disposable).
-    // This perfectly solves React 18 Strict Mode and guarantees no memory/DOM leaks.
     return () => {
       disposable.dispose();
       resizeObserver.disconnect();
@@ -398,7 +410,6 @@ export default function TerminalDisplay({
 
       term.dispose();
 
-      // Only null out the refs if they still point to our specific instances
       if (wsRef.current === ws) wsRef.current = null;
       if (termRef.current === term) termRef.current = null;
       if (fitAddonRef.current === fitAddon) fitAddonRef.current = null;
@@ -434,7 +445,6 @@ export default function TerminalDisplay({
       return;
     }
 
-    // Non-modifiers (Tab, Esc, arrows) are sent as-is
     sendToShell(key.sequence, "handleVirtualKey");
     clearAllModifiers();
     termRef.current?.focus();
