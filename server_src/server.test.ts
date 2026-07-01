@@ -1255,7 +1255,7 @@ describe("toolNameFromKind — permission request toolName extraction (Bug Root 
     });
 
     it("unknown kind returns undefined", () => {
-      const kind = "unknown";
+      const kind = "unknown" as string;
       const toolName = kind === "execute" ? "Bash" : undefined;
       expect(toolName).toBeUndefined();
     });
@@ -1433,11 +1433,12 @@ describe("toolName extraction — session/request_permission missing _meta (Las 
 
   it("OLD broken extraction: title.split()[0] returns exe path, not 'Bash'", () => {
     // This demonstrates the bug: the old extraction code
+    const rawAny = raw as any;
     const toolName =
-      raw.params?.toolCall?._meta?.claudeCode?.toolName ??
-      raw.params?._meta?.claudeCode?.toolName ??
-      (typeof raw.params?.toolCall?.title === "string"
-        ? raw.params.toolCall.title.split(/\s+/)[0]
+      rawAny.params?.toolCall?._meta?.claudeCode?.toolName ??
+      rawAny.params?._meta?.claudeCode?.toolName ??
+      (typeof rawAny.params?.toolCall?.title === "string"
+        ? rawAny.params.toolCall.title.split(/\s+/)[0]
         : undefined);
 
     // Demonstrates the bug: toolName is the exe path, never "Bash"
@@ -1459,10 +1460,11 @@ describe("toolName extraction — session/request_permission missing _meta (Las 
       }
     }
 
+    const rawAny = raw as any;
     const toolName =
-      raw.params?.toolCall?._meta?.claudeCode?.toolName ??
-      raw.params?._meta?.claudeCode?.toolName ??
-      toolNameFromKind(raw.params?.toolCall?.kind);
+      rawAny.params?.toolCall?._meta?.claudeCode?.toolName ??
+      rawAny.params?._meta?.claudeCode?.toolName ??
+      toolNameFromKind(rawAny.params?.toolCall?.kind);
 
     expect(toolName).toBe("Bash");
 

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { Routes, Route, useParams, useNavigate, Navigate } from "react-router-dom";
 import {
   History
 } from "lucide-react";
@@ -17,18 +18,17 @@ import { Workspace, Thread, Message } from "./types";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useOptimisticMessages } from "./hooks/useOptimisticMessages";
 
-export default function App() {
+// The inner app component that uses URL params for routing
+function MessagesView() {
+  const { workspaceId, threadId } = useParams<{ workspaceId?: string; threadId?: string }>();
+  const navigate = useNavigate();
   const [isMobile, setIsMobile] = useState(false);
 
-  // Desktop state (always declared, even on mobile)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>("");
   const [threads, setThreads] = useState<Thread[]>([]);
-  const [activeThreadId, setActiveThreadId] = useState<string>("");
   const [inputText, setInputText] = useState<string>("");
   const [wsConnected, setWsConnected] = useState(false);
 
-  // Navigation / views
   const [activeView, setActiveView] = useState<'threads' | 'activity'>('threads');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showThreadListOnMobile, setShowThreadListOnMobile] = useState(false);
@@ -38,7 +38,6 @@ export default function App() {
   const threadSseRef = useRef<EventSource | null>(null);
   const globalSseRef = useRef<EventSource | null>(null);
 
-  // Dialog states (workspace modal)
   const [showWorkspaceModal, setShowWorkspaceModal] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
   const [workspaceName, setWorkspaceName] = useState("");
@@ -46,10 +45,11 @@ export default function App() {
   const [workspaceError, setWorkspaceError] = useState("");
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-
   const [isLoading, setIsLoading] = useState(true);
 
-  // Optimistic messages hook
+  const activeWorkspaceId = workspaceId || "";
+  const activeThreadId = threadId || "";
+
   const {
     messages,
     addOptimistic,
@@ -59,7 +59,6 @@ export default function App() {
     clearOptimistic,
   } = useOptimisticMessages();
 
-  // Callbacks for WebSocket events
   const handleWsMessage = useCallback((msg: Message) => {
     appendMessage(msg);
   }, [appendMessage]);
@@ -80,7 +79,6 @@ export default function App() {
     setWsConnected(connected);
   }, []);
 
-  // WebSocket hook
   const {
     sendMessage: wsSendMessage,
     respondToPermission: wsRespond,
@@ -94,60 +92,51 @@ export default function App() {
     onConnectionChange: handleWsConnectionChange,
   });
 
-  // Detect mobile on mount and on resize
+  // Detect mobile
   useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
-    };
-
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
     checkMobile();
     window.addEventListener("resize", checkMobile);
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
 
-  // Helper: Load initial database values from Express API
   const fetchWorkspaces = async () => {
     try {
       const res = await fetch("/api/workspaces");
       if (res.ok) {
         const data = await res.json();
         setWorkspaces(data);
-        if (data.length > 0 && !activeWorkspaceId) {
-          setActiveWorkspaceId(data[0].id);
+        if (!workspaceId && data.length > 0) {
+          navigate(`/messages/${data[0].id}`, { replace: true });
         }
       }
     } catch (e) {
-      console.error("API error fetching workspaces, using local simulation fallback", e);
+      console.error("API error fetching workspaces", e);
     }
   };
 
-  const fetchThreads = useCallback(async (workspaceId: string) => {
-    if (!workspaceId) return;
+  const fetchThreads = useCallback(async (wsId: string) => {
+    if (!wsId) return;
     try {
-      const res = await fetch(`/api/workspaces/${workspaceId}/threads`);
+      const res = await fetch(`/api/workspaces/${wsId}/threads`);
       if (res.ok) {
         const data = await res.json();
         setThreads(data);
-        if (data.length > 0) {
-          const currentExists = data.some((t: Thread) => t.id === activeThreadId);
-          if (!currentExists) {
-            setActiveThreadId(data[0].id);
-          }
-        } else {
-          setActiveThreadId("");
-          clearOptimistic();
-          setConfirmed([]);
+        if (!threadId && data.length > 0) {
+          navigate(`/messages/${wsId}/${data[0].id}`, { replace: true });
+        } else if (data.length === 0) {
+          navigate(`/messages/${wsId}`, { replace: true });
         }
       }
     } catch (e) {
       console.error("API error fetching threads", e);
     }
-  }, [activeThreadId, clearOptimistic, setConfirmed]);
+  }, [threadId, navigate]);
 
-  const fetchMessages = useCallback(async (threadId: string) => {
-    if (!threadId) return;
+  const fetchMessages = useCallback(async (tid: string) => {
+    if (!tid) return;
     try {
-      const res = await fetch(`/api/threads/${threadId}/messages`);
+      const res = await fetch(`/api/threads/${tid}/messages`);
       if (res.ok) {
         const data = await res.json();
         setConfirmed(data);
@@ -157,7 +146,7 @@ export default function App() {
     }
   }, [setConfirmed]);
 
-  // Run on mount
+  // Init
   useEffect(() => {
     const initialize = async () => {
       setIsLoading(true);
@@ -167,7 +156,7 @@ export default function App() {
     initialize();
   }, []);
 
-  // SSE: Thread log streaming for active thread
+  // SSE: Thread log streaming
   useEffect(() => {
     if (threadSseRef.current) {
       threadSseRef.current.close();
@@ -217,14 +206,14 @@ export default function App() {
     };
   }, []);
 
-  // Update threads when active workspace changes
+  // Fetch threads when workspace URL param changes
   useEffect(() => {
     if (activeWorkspaceId) {
       fetchThreads(activeWorkspaceId);
     }
   }, [activeWorkspaceId, fetchThreads]);
 
-  // Update messages when active thread changes
+  // Fetch messages when thread URL param changes
   useEffect(() => {
     clearOptimistic();
     if (activeThreadId) {
@@ -244,10 +233,6 @@ export default function App() {
     }
   };
 
-  // No polling needed — WebSocket handles real-time updates.
-  // Fallback: poll only when disconnected (reconnection handles the rest).
-
-  // Handle Workspace creation/edit
   const handleWorkspaceSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!workspaceName.trim()) return;
@@ -280,7 +265,7 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           setWorkspaces(prev => [...prev, data]);
-          setActiveWorkspaceId(data.id);
+          navigate(`/messages/${data.id}`, { replace: true });
           setGlobalLogs(prev => [
             `[${new Date().toLocaleTimeString()}] Registered new local workspace project: ${workspaceName}`,
             ...prev
@@ -302,9 +287,8 @@ export default function App() {
     }
   };
 
-  // Open edit modal for a workspace
-  const handleOpenEditWorkspace = (workspaceId: string) => {
-    const ws = workspaces.find(w => w.id === workspaceId);
+  const handleOpenEditWorkspace = (wsId: string) => {
+    const ws = workspaces.find(w => w.id === wsId);
     if (!ws) return;
     setEditingWorkspace(ws);
     setWorkspaceName(ws.name);
@@ -312,7 +296,6 @@ export default function App() {
     setShowWorkspaceModal(true);
   };
 
-  // Open new workspace modal
   const handleOpenNewWorkspace = () => {
     setEditingWorkspace(null);
     setWorkspaceName("");
@@ -320,7 +303,6 @@ export default function App() {
     setShowWorkspaceModal(true);
   };
 
-  // Handle Thread creation (no modal — direct creation)
   const handleCreateThreadQuick = async () => {
     if (!activeWorkspaceId) return;
 
@@ -333,7 +315,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setThreads(prev => [...prev, data]);
-        setActiveThreadId(data.id);
+        navigate(`/messages/${activeWorkspaceId}/${data.id}`);
 
         setGlobalLogs(prev => [
           `[${new Date().toLocaleTimeString()}] Initialized Claude ACP process thread`,
@@ -345,32 +327,28 @@ export default function App() {
     }
   };
 
-  // Handle Thread rename
-  const handleRenameThread = async (threadId: string, newTitle: string) => {
+  const handleRenameThread = async (tid: string, newTitle: string) => {
     try {
-      const res = await fetch(`/api/threads/${threadId}`, {
+      const res = await fetch(`/api/threads/${tid}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: newTitle })
       });
       if (res.ok) {
-        setThreads(prev => prev.map(t => t.id === threadId ? { ...t, title: newTitle } : t));
+        setThreads(prev => prev.map(t => t.id === tid ? { ...t, title: newTitle } : t));
       }
     } catch (e) {
       console.error(e);
     }
   };
 
-  // Handle Thread deletion
-  const handleDeleteThread = async (threadId: string) => {
+  const handleDeleteThread = async (tid: string) => {
     try {
-      const res = await fetch(`/api/threads/${threadId}`, { method: "DELETE" });
+      const res = await fetch(`/api/threads/${tid}`, { method: "DELETE" });
       if (res.ok) {
-        setThreads(prev => prev.filter(t => t.id !== threadId));
-        if (activeThreadId === threadId) {
-          setActiveThreadId("");
-          clearOptimistic();
-          setConfirmed([]);
+        setThreads(prev => prev.filter(t => t.id !== tid));
+        if (activeThreadId === tid) {
+          navigate(`/messages/${activeWorkspaceId}`, { replace: true });
         }
       }
     } catch (e) {
@@ -378,19 +356,21 @@ export default function App() {
     }
   };
 
-  // Handle Workspace deletion
-  const handleDeleteWorkspace = async (workspaceId: string) => {
+  const handleDeleteWorkspace = async (wsId: string) => {
     try {
-      const res = await fetch(`/api/workspaces/${workspaceId}`, { method: "DELETE" });
+      const res = await fetch(`/api/workspaces/${wsId}`, { method: "DELETE" });
       if (res.ok) {
-        setWorkspaces(prev => prev.filter(w => w.id !== workspaceId));
-        if (activeWorkspaceId === workspaceId) {
-          const remaining = workspaces.filter(w => w.id !== workspaceId);
-          setActiveWorkspaceId(remaining.length > 0 ? remaining[0].id : "");
+        const remaining = workspaces.filter(w => w.id !== wsId);
+        setWorkspaces(remaining);
+        if (activeWorkspaceId === wsId) {
           setThreads([]);
           clearOptimistic();
           setConfirmed([]);
-          setActiveThreadId("");
+          if (remaining.length > 0) {
+            navigate(`/messages/${remaining[0].id}`, { replace: true });
+          } else {
+            navigate("/", { replace: true });
+          }
         }
       }
     } catch (e) {
@@ -398,7 +378,6 @@ export default function App() {
     }
   };
 
-  // Send message via WebSocket with optimistic UI
   const handleSendMessage = async () => {
     if (!inputText.trim() || !activeThreadId) return;
 
@@ -410,19 +389,16 @@ export default function App() {
     wsSendMessage(activeThreadId, messageText, clientMsgId);
   };
 
-  // Handle permission response via WebSocket
   const handlePermissionResponse = (optionId: string, toolCommand?: string, toolName?: string) => {
     if (!activeThreadId) return;
     wsRespond(activeThreadId, optionId, toolCommand, toolName);
   };
 
-  // Cancel agent turn via WebSocket
   const handleCancelAgent = () => {
     if (!activeThreadId) return;
     wsCancel(activeThreadId);
   };
 
-  // Deploy Cloud Run action simulation
   const handleDeploy = () => {
     setIsDeploying(true);
     setGlobalLogs(prev => [
@@ -440,22 +416,17 @@ export default function App() {
     }, 2500);
   };
 
-  // Render mobile or desktop layout
   if (isMobile) {
     return <MobileApp />;
   }
 
   return (
     <div className="flex flex-col md:flex-row w-screen overflow-hidden bg-[#0B0B0C] text-[#e4e2e4] font-sans antialiased" style={{ height: '100vh' }}>
-      {/* COLUMN 1: WORKSPACE SIDEBAR - Hidden on mobile, collapsible on tablet, fixed on desktop */}
       <div className="hidden md:flex">
         <WorkspaceSidebar
           workspaces={workspaces}
           activeWorkspaceId={activeWorkspaceId}
-          onSelectWorkspace={(id) => {
-            setActiveWorkspaceId(id);
-            setActiveView('threads');
-          }}
+          onSelectWorkspace={(id) => navigate(`/messages/${id}`)}
           onOpenNewWorkspace={handleOpenNewWorkspace}
           onEditWorkspace={handleOpenEditWorkspace}
           onDeleteWorkspace={handleDeleteWorkspace}
@@ -467,7 +438,6 @@ export default function App() {
         />
       </div>
 
-      {/* Mobile sidebar overlay - New nested navigator */}
       {showThreadListOnMobile && (
         <MobileThreadNavigator
           workspaces={workspaces}
@@ -478,11 +448,8 @@ export default function App() {
           }, {} as Record<string, Thread[]>)}
           activeWorkspaceId={activeWorkspaceId}
           activeThreadId={activeThreadId}
-          onSelectWorkspace={(id) => {
-            setActiveWorkspaceId(id);
-            setActiveView('threads');
-          }}
-          onSelectThread={setActiveThreadId}
+          onSelectWorkspace={(id) => navigate(`/messages/${id}`)}
+          onSelectThread={(id) => navigate(`/messages/${activeWorkspaceId}/${id}`)}
           onOpenNewThread={handleCreateThreadQuick}
           onRenameThread={handleRenameThread}
           onDeleteThread={handleDeleteThread}
@@ -492,22 +459,19 @@ export default function App() {
         />
       )}
 
-      {/* RENDER CONTENT PANELS ACCORDING TO NAVIGATION STATE */}
       {activeView === 'threads' && (
         <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-          {/* COLUMN 2: THREADS SELECTOR - Hidden on mobile, visible on tablet+ */}
           <div className="hidden md:flex md:w-64">
             <ThreadList
               threads={threads}
               activeThreadId={activeThreadId}
-              onSelectThread={setActiveThreadId}
+              onSelectThread={(id) => navigate(`/messages/${activeWorkspaceId}/${id}`)}
               onOpenNewThread={handleCreateThreadQuick}
               onRenameThread={handleRenameThread}
               onDeleteThread={handleDeleteThread}
             />
           </div>
 
-          {/* COLUMN 3: MAIN CHAT CANVAS - Full width on mobile */}
           <div className="flex-1 flex flex-col overflow-hidden">
             <ChatCanvas
               activeThread={activeThread}
@@ -528,7 +492,6 @@ export default function App() {
         </div>
       )}
 
-      {/* GLOBAL LOGS VIEW PANEL */}
       {activeView === 'activity' && (
         <main className="flex-1 flex flex-col bg-[#0B0B0C] overflow-hidden p-4 md:p-8 animate-fadeIn">
           <div className="max-w-4xl w-full mx-auto space-y-4 md:space-y-6 flex flex-col h-full">
@@ -561,7 +524,6 @@ export default function App() {
         </main>
       )}
 
-      {/* --- MODAL DIALOGS --- */}
       <WorkspaceModal
         isOpen={showWorkspaceModal}
         onClose={() => {
@@ -583,5 +545,16 @@ export default function App() {
         onClose={() => setShowSettingsModal(false)}
       />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<MessagesView />} />
+      <Route path="/messages/:workspaceId" element={<MessagesView />} />
+      <Route path="/messages/:workspaceId/:threadId" element={<MessagesView />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
