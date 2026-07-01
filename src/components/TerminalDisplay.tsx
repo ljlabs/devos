@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useRef, useCallback, useState } from "react";
-import { Terminal, Plus, X } from "lucide-react";
+import { Terminal, X } from "lucide-react";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -14,7 +14,6 @@ import "@xterm/xterm/css/xterm.css";
 // ---------------------------------------------------------------------------
 
 interface TerminalDisplayProps {
-  logs?: any[];
   threadTitle?: string;
   onClose?: () => void;
 }
@@ -59,10 +58,13 @@ interface VKey {
 const VIRTUAL_KEYS: VKey[] = [
   { label: "ESC", sequence: "\x1b" },
   { label: "TAB", sequence: "\t" },
-  { label: "CTRL", sequence: "" },  // modifier — handled specially
-  { label: "ALT", sequence: "" },   // modifier — handled specially
-  { label: "↑", sequence: "\x1b[A" },  // Up
-  { label: "↓", sequence: "\x1b[B" },  // Down
+  { label: "CTRL", sequence: "" },
+  { label: "ALT", sequence: "" },
+  { label: "SHIFT", sequence: "" },
+  { label: "↑", sequence: "\x1b[A" },
+  { label: "↓", sequence: "\x1b[B" },
+  { label: "←", sequence: "\x1b[D" },
+  { label: "→", sequence: "\x1b[C" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -70,7 +72,6 @@ const VIRTUAL_KEYS: VKey[] = [
 // ---------------------------------------------------------------------------
 
 export default function TerminalDisplay({
-  logs = [],
   threadTitle,
   onClose,
 }: TerminalDisplayProps) {
@@ -81,41 +82,123 @@ export default function TerminalDisplay({
   const termIdRef = useRef<string>(
     `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   );
-  const ctrlModifierRef = useRef(false);
-  const altModifierRef = useRef(false);
+
+  // Modifier state (for UI rendering)
+  const [ctrlArmed, setCtrlArmed] = useState(false);
+  const [altArmed, setAltArmed] = useState(false);
+  const [shiftArmed, setShiftArmed] = useState(false);
+
+  // Modifier refs (for event handlers to avoid stale closures)
+  const ctrlArmedRef = useRef(false);
+  const altArmedRef = useRef(false);
+  const shiftArmedRef = useRef(false);
+
+  // Safety net: auto-clear modifiers after 5s
+  const modifierExpireTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [isConnected, setIsConnected] = useState(false);
   const fitTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const touchStateRef = useRef({ startY: 0, lastY: 0 });
 
-  // Cleanup function
-  const cleanup = useCallback(() => {
-    if (fitTimeoutRef.current) {
-      clearTimeout(fitTimeoutRef.current);
-      fitTimeoutRef.current = null;
-    }
-    if (wsRef.current) {
-      try {
-        wsRef.current.send(
-          JSON.stringify({ type: "terminal_close", terminalId: termIdRef.current })
-        );
-        wsRef.current.close();
-      } catch {}
-      wsRef.current = null;
-    }
-    if (termRef.current) {
-      termRef.current.dispose();
-      termRef.current = null;
-    }
-    fitAddonRef.current = null;
-    setIsConnected(false);
+  // Lock page-level scrolling
+  useEffect(() => {
+    const { body, documentElement: html } = document;
+    const prevBodyOverflow = body.style.overflow;
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyPosition = body.style.position;
+    const prevBodyWidth = body.style.width;
+    const prevBodyTop = body.style.top;
+    const scrollY = window.scrollY;
+
+    body.style.overflow = "hidden";
+    html.style.overflow = "hidden";
+    body.style.position = "fixed";
+    body.style.width = "100%";
+    body.style.top = `-${scrollY}px`;
+
+    return () => {
+      body.style.overflow = prevBodyOverflow;
+      html.style.overflow = prevHtmlOverflow;
+      body.style.position = prevBodyPosition;
+      body.style.width = prevBodyWidth;
+      body.style.top = prevBodyTop;
+      window.scrollTo(0, scrollY);
+    };
   }, []);
 
-  // Initialize xterm + WebSocket on mount
+  // Monitor virtual keyboard height
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !window.visualViewport) return;
+
+    const updateContainerHeight = () => {
+      window.scrollTo(0, 0);
+      const vh = window.visualViewport.height;
+      const headerHeight = 48;
+      const toolbarHeight = 56;
+      const availableHeight = vh - headerHeight - toolbarHeight - 24;
+      const maxHeight = Math.max(availableHeight, 100);
+
+      container.style.maxHeight = `${maxHeight}px`;
+      container.style.height = `${maxHeight}px`;
+
+      if (fitAddonRef.current && termRef.current) {
+        try { fitAddonRef.current.fit(); } catch { }
+      }
+    };
+
+    window.visualViewport.addEventListener("resize", updateContainerHeight);
+    window.visualViewport.addEventListener("scroll", updateContainerHeight);
+    updateContainerHeight();
+
+    return () => {
+      window.visualViewport?.removeEventListener("resize", updateContainerHeight);
+      window.visualViewport?.removeEventListener("scroll", updateContainerHeight);
+    };
+  }, []);
+
+  // Clear all modifiers
+  const clearAllModifiers = useCallback(() => {
+    if (modifierExpireTimerRef.current) {
+      clearTimeout(modifierExpireTimerRef.current);
+      modifierExpireTimerRef.current = null;
+    }
+    ctrlArmedRef.current = false;
+    altArmedRef.current = false;
+    shiftArmedRef.current = false;
+    setCtrlArmed(false);
+    setAltArmed(false);
+    setShiftArmed(false);
+  }, []);
+
+  // Arm modifier expiry timer
+  const armModifierExpiry = useCallback(() => {
+    if (modifierExpireTimerRef.current) clearTimeout(modifierExpireTimerRef.current);
+    modifierExpireTimerRef.current = setTimeout(() => {
+      clearAllModifiers();
+    }, 5000);
+  }, [clearAllModifiers]);
+
+  const sendToShell = useCallback((data: string, source: string) => {
+    console.log(`submit data: ${data}, from ${source}`);
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(
+      JSON.stringify({
+        type: "terminal_data",
+        terminalId: termIdRef.current,
+        data,
+      })
+    );
+  }, []);
+
+  // Initialize xterm + WebSocket
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    // Create xterm instance
+    // 1. Create instances locally so cleanup correctly targets them,
+    // protecting against React 18 Strict Mode double-invocations.
     const term = new XTerminal({
       theme: TERMINAL_THEME,
       fontFamily: "'JetBrains Mono', monospace",
@@ -127,50 +210,42 @@ export default function TerminalDisplay({
     });
     termRef.current = term;
 
-    // Fit addon
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     fitAddonRef.current = fitAddon;
 
-    // Open terminal in container
     term.open(container);
 
-    // Delay fit to let the container fully render + calculate layout
-    // Use setTimeout for more reliable layout calculation than requestAnimationFrame
+    if (term.textarea) {
+      term.textarea.setAttribute('autocorrect', 'off');
+      term.textarea.setAttribute('autocapitalize', 'off');
+      term.textarea.setAttribute('spellcheck', 'false');
+      term.textarea.setAttribute('autocomplete', 'off');
+      term.textarea.setAttribute('data-gramm', 'false');
+      term.textarea.focus();
+    }
+
     fitTimeoutRef.current = setTimeout(() => {
-      try {
-        fitAddon.fit();
-        // Verify dimensions were calculated; fallback if needed
-        const dims = fitAddon.proposeDimensions();
-        if (!dims || dims.cols < 40 || dims.rows < 10) {
-          // Container height still unmeasured; use terminal's current size
-          console.warn("FitAddon dimensions too small, using terminal defaults");
-        }
-      } catch (e) {
-        console.warn("Initial fit failed:", e);
-      }
+      try { fitAddon.fit(); } catch (e) { console.warn("Initial fit failed:", e); }
     }, 100);
 
-    // WebSocket connection
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/ws`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      // Send initial size
+      try { fitAddon.fit(); } catch { }
       const dims = fitAddon.proposeDimensions();
       const cols = dims?.cols || 80;
       const rows = dims?.rows || 24;
 
-      ws.send(
-        JSON.stringify({
-          type: "terminal_create",
-          terminalId: termIdRef.current,
-          cols,
-          rows,
-        })
-      );
+      ws.send(JSON.stringify({
+        type: "terminal_create",
+        terminalId: termIdRef.current,
+        cols,
+        rows,
+      }));
       setIsConnected(true);
     };
 
@@ -182,7 +257,7 @@ export default function TerminalDisplay({
         } else if (msg.type === "terminal_exit") {
           term.write("\r\n\x1b[33m[Process exited]\x1b[0m\r\n");
         }
-      } catch {}
+      } catch { }
     };
 
     ws.onclose = () => {
@@ -194,56 +269,99 @@ export default function TerminalDisplay({
       term.write("\r\n\x1b[31m[Connection error]\x1b[0m\r\n");
     };
 
-    // Terminal input → WebSocket
+    // --- CENTRALIZED INPUT HANDLING ---
+    // --- 1. NORMAL TYPING HANDLER ---
+    // Handles physical keyboard inputs and finalized mobile text.
+    // Physical Ctrl+C, etc., are natively handled by xterm and arrive here perfectly.
     const disposable = term.onData((data: string) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            type: "terminal_data",
-            terminalId: termIdRef.current,
-            data,
-          })
-        );
-      }
+      // If a virtual modifier is armed, we completely ignore onData because 
+      // the beforeinput listener (below) will handle it instead.
+      const hasModifier = ctrlArmedRef.current || altArmedRef.current || shiftArmedRef.current;
+      if (hasModifier) return;
+
+      sendToShell(data, "onData");
     });
 
-    // ResizeObserver for auto-fit
+    // --- 2. VIRTUAL MODIFIER INTERCEPTOR (THE FIX) ---
+    // Mobile keyboards buffer keystrokes. If the user arms Virtual CTRL and types 'c', 
+    // it gets trapped in the buffer. 'beforeinput' fires instantly, allowing us to 
+    // hijack the keystroke before the mobile keyboard buffers it.
+    const handleBeforeInput = (e: InputEvent) => {
+      const hasModifier = ctrlArmedRef.current || altArmedRef.current || shiftArmedRef.current;
+      
+      // If no virtual modifiers are armed, do absolutely nothing. 
+      // Let the browser and xterm process normal typing normally.
+      if (!hasModifier || !e.data) return;
+
+      // A modifier IS armed! We must hijack this specific keystroke.
+      e.preventDefault();
+      e.stopPropagation();
+
+      const firstChar = e.data[e.data.length-1];
+      let mapped = firstChar;
+
+
+      // Apply modifiers to the intercepted character
+      if (ctrlArmedRef.current) {
+        if (/^[a-zA-Z]$/.test(firstChar)) {
+          mapped = String.fromCharCode(firstChar.toLowerCase().charCodeAt(0) - 96);
+        } else if (firstChar === ' ' || firstChar === '@') { mapped = '\x00'; }
+        else if (firstChar === '[') { mapped = '\x1b'; }
+        else if (firstChar === '\\') { mapped = '\x1c'; }
+        else if (firstChar === ']') { mapped = '\x1d'; }
+        else if (firstChar === '^') { mapped = '\x1e'; }
+        else if (firstChar === '_') { mapped = '\x1f'; }
+      } else if (shiftArmedRef.current) {
+        const shiftMap: Record<string, string> = {
+          '1': '!', '2': '@', '3': '#', '4': '$', '5': '%',
+          '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
+          '-': '_', '=': '+', '[': '{', ']': '}', '\\': '|',
+          ';': ':', "'": '"', ',': '<', '.': '>', '/': '?', '`': '~'
+        };
+        if (/^[a-zA-Z]$/.test(firstChar)) {
+          mapped = firstChar.toUpperCase();
+        } else if (shiftMap[firstChar]) {
+          mapped = shiftMap[firstChar];
+        }
+      }
+
+      if (altArmedRef.current) {
+        mapped = '\x1b' + mapped;
+      }
+
+      sendToShell(mapped, "beforeinput (Virtual Modifier)");
+      clearAllModifiers();
+    };
+
+    // We use capture: true so we grab the event before xterm's hidden textarea gets it
+    container.addEventListener("beforeinput", handleBeforeInput as EventListener, { capture: true });
+
     const resizeObserver = new ResizeObserver(() => {
       requestAnimationFrame(() => {
         try {
           fitAddon.fit();
           const dims = fitAddon.proposeDimensions();
           if (dims && ws.readyState === WebSocket.OPEN) {
-            ws.send(
-              JSON.stringify({
-                type: "terminal_resize",
-                terminalId: termIdRef.current,
-                cols: dims.cols,
-                rows: dims.rows,
-              })
-            );
+            ws.send(JSON.stringify({
+              type: "terminal_resize",
+              terminalId: termIdRef.current,
+              cols: dims.cols,
+              rows: dims.rows,
+            }));
           }
-        } catch {}
+        } catch { }
       });
     });
     resizeObserver.observe(container);
 
-    // Manual touch scroll fallback for mobile
-    // xterm.js sets touch-action: none on the parent, which blocks native scroll
-    // This captures touch drag and converts it to scrollLines() calls
     const onTouchStart = (e: TouchEvent) => {
       touchStateRef.current.startY = e.touches[0].clientY;
       touchStateRef.current.lastY = e.touches[0].clientY;
     };
-
     const onTouchMove = (e: TouchEvent) => {
       const currentY = e.touches[0].clientY;
       const deltaY = touchStateRef.current.lastY - currentY;
-      
-      // Line height in pixels (tune this to match your font size + line spacing)
-      // fontSize: 13 with default line-height typically gives ~18-20px per row
       const lineHeight = 20;
-      
       if (Math.abs(deltaY) >= lineHeight) {
         const lines = Math.trunc(deltaY / lineHeight);
         if (lines !== 0) {
@@ -252,45 +370,75 @@ export default function TerminalDisplay({
         }
       }
     };
-
+    
+    // We attach passive listeners so they don't break scroll behavior
     container.addEventListener("touchstart", onTouchStart, { passive: true });
     container.addEventListener("touchmove", onTouchMove, { passive: true });
 
-    // Cleanup on unmount
+    // 2. Strict Cleanup Function closures over local variables (term, ws, disposable).
+    // This perfectly solves React 18 Strict Mode and guarantees no memory/DOM leaks.
     return () => {
       disposable.dispose();
       resizeObserver.disconnect();
       container.removeEventListener("touchstart", onTouchStart);
       container.removeEventListener("touchmove", onTouchMove);
-      cleanup();
+
+      container.removeEventListener("beforeinput", handleBeforeInput as EventListener, { capture: true });
+
+      if (fitTimeoutRef.current) {
+        clearTimeout(fitTimeoutRef.current);
+      }
+
+      try {
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.send(JSON.stringify({ type: "terminal_close", terminalId: termIdRef.current }));
+          ws.close();
+        }
+      } catch { }
+
+      term.dispose();
+
+      // Only null out the refs if they still point to our specific instances
+      if (wsRef.current === ws) wsRef.current = null;
+      if (termRef.current === term) termRef.current = null;
+      if (fitAddonRef.current === fitAddon) fitAddonRef.current = null;
+      
+      setIsConnected(false);
     };
-  }, [cleanup]);
+  }, [sendToShell, clearAllModifiers]);
 
   // Virtual key handler
   const handleVirtualKey = useCallback((key: VKey) => {
-    const term = termRef.current;
-    if (!term) return;
-
-    // Handle CTRL as modifier
     if (key.label === "CTRL") {
-      ctrlModifierRef.current = !ctrlModifierRef.current;
+      const next = !ctrlArmedRef.current;
+      ctrlArmedRef.current = next;
+      setCtrlArmed(next);
+      if (next) armModifierExpiry();
+      termRef.current?.focus();
       return;
     }
     if (key.label === "ALT") {
-      altModifierRef.current = !altModifierRef.current;
+      const next = !altArmedRef.current;
+      altArmedRef.current = next;
+      setAltArmed(next);
+      if (next) armModifierExpiry();
+      termRef.current?.focus();
+      return;
+    }
+    if (key.label === "SHIFT") {
+      const next = !shiftArmedRef.current;
+      shiftArmedRef.current = next;
+      setShiftArmed(next);
+      if (next) armModifierExpiry();
+      termRef.current?.focus();
       return;
     }
 
-    // Send with modifier
-    if (ctrlModifierRef.current && key.label.length === 1) {
-      const code = key.label.toLowerCase().charCodeAt(0) - 96;
-      term.write(String.fromCharCode(code));
-      ctrlModifierRef.current = false;
-      return;
-    }
-
-    term.write(key.sequence);
-  }, []);
+    // Non-modifiers (Tab, Esc, arrows) are sent as-is
+    sendToShell(key.sequence, "handleVirtualKey");
+    clearAllModifiers();
+    termRef.current?.focus();
+  }, [sendToShell, armModifierExpiry, clearAllModifiers]);
 
   return (
     <div className="flex flex-col h-full bg-[#0B0B0C]">
@@ -320,23 +468,27 @@ export default function TerminalDisplay({
       <div
         ref={containerRef}
         className="flex-1 min-h-0 overflow-hidden p-1"
+        style={{ maxHeight: '100%', height: '100%', overscrollBehavior: 'contain' }}
       />
 
       {/* Virtual keyboard toolbar (mobile) */}
-      <div className="bg-[#16161A] border-t border-white/5 flex items-center justify-around px-2 py-1.5 flex-shrink-0">
+      <div className="bg-[#16161A] border-t border-white/5 flex items-center gap-1.5 px-2 py-1.5 flex-shrink-0 overflow-x-auto">
         {VIRTUAL_KEYS.map((key) => {
           const isModifier =
-            (key.label === "CTRL" && ctrlModifierRef.current) ||
-            (key.label === "ALT" && altModifierRef.current);
+            (key.label === "CTRL" && ctrlArmed) ||
+            (key.label === "ALT" && altArmed) ||
+            (key.label === "SHIFT" && shiftArmed);
           return (
             <button
               key={key.label}
-              onClick={() => handleVirtualKey(key)}
-              className={`px-2.5 py-1 rounded text-[11px] font-mono font-medium transition-colors ${
-                isModifier
+              onPointerDown={(e) => {
+                e.preventDefault();
+                handleVirtualKey(key);
+              }}
+              className={`px-2.5 py-1 rounded text-[11px] font-mono font-medium transition-colors touch-manipulation flex-shrink-0 ${isModifier
                   ? "bg-emerald-500/20 text-emerald-400"
                   : "bg-white/5 text-slate-400 active:bg-emerald-500/20 active:text-emerald-400"
-              }`}
+                }`}
             >
               {key.label}
             </button>

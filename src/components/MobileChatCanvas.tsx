@@ -66,6 +66,36 @@ export default function MobileChatCanvas({
     return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
   };
 
+  // Monitor virtual keyboard and adjust scroll area
+  useEffect(() => {
+    const scrollContainer = scrollContainerRef.current;
+    if (!scrollContainer || !window.visualViewport) return;
+
+    const updateScrollHeight = () => {
+      const vh = window.visualViewport.height;
+      const headerHeight = 56; // h-14 = 56px
+      const inputHeight = 80; // Input area ~80px (textarea + padding)
+      const extraBuffer = 20; // Extra clearance for virtual keyboard and nav
+      
+      // Available height = viewport - header - input - extra buffer
+      const availableHeight = vh - headerHeight - inputHeight - extraBuffer;
+      const maxHeight = Math.max(availableHeight, 150); // Minimum 150px
+      
+      scrollContainer.style.maxHeight = `${maxHeight}px`;
+    };
+
+    // Listen to keyboard open/close
+    window.visualViewport.addEventListener("resize", updateScrollHeight);
+    window.visualViewport.addEventListener("scroll", updateScrollHeight);
+    
+    updateScrollHeight();
+
+    return () => {
+      window.visualViewport?.removeEventListener("resize", updateScrollHeight);
+      window.visualViewport?.removeEventListener("scroll", updateScrollHeight);
+    };
+  }, []);
+
   // Scroll to bottom on new messages
   useEffect(() => {
     if (isNearBottom()) {
@@ -161,7 +191,7 @@ export default function MobileChatCanvas({
       <div
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto p-3 space-y-4 min-h-0"
-        style={{ overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch' }}
+        style={{ overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch', maxHeight: '100%' }}
       >
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full text-center">
