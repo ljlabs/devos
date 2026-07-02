@@ -11,12 +11,13 @@ import {
 import WorkspaceSidebar from "./components/WorkspaceSidebar";
 import ThreadList from "./components/ThreadList";
 import ChatCanvas from "./components/ChatCanvas";
-import WorkspaceIdeView from "./components/WorkspaceIdeView";
 import MobileThreadNavigator from "./components/MobileThreadNavigator";
 import { WorkspaceModal, SettingsModal } from "./components/Dialogs";
-import { Workspace, Thread, Message } from "./types";
+import { Workspace, Thread, Message, FileEntry, FileContent } from "./types";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useOptimisticMessages } from "./hooks/useOptimisticMessages";
+import FilesPanel from "./components/ide/FilesPanel";
+import FileEditorPanel from "./components/ide/FileEditorPanel";
 
 // Inner app component that uses URL params for routing
 function MessagesView() {
@@ -41,6 +42,18 @@ function MessagesView() {
   const [threadLogs, setThreadLogs] = useState<Record<string, any[]>>({});
   const threadSseRef = useRef<EventSource | null>(null);
   const globalSseRef = useRef<EventSource | null>(null);
+
+  // IDE state (lifted from WorkspaceIdeView)
+  const [ideRootEntries, setIdeRootEntries] = useState<FileEntry[]>([]);
+  const [ideExpandedFolders, setIdeExpandedFolders] = useState<Set<string>>(new Set());
+  const [ideChildEntries, setIdeChildEntries] = useState<Record<string, FileEntry[]>>({});
+  const [ideActiveFile, setIdeActiveFile] = useState<FileContent | null>(null);
+  const [ideActiveFilePath, setIdeActiveFilePath] = useState<string>("");
+  const [ideIsLoadingTree, setIdeIsLoadingTree] = useState(false);
+  const [ideIsLoadingFile, setIdeIsLoadingFile] = useState(false);
+  const [ideEditorContent, setIdeEditorContent] = useState<string>("");
+  const [ideIsDirty, setIdeIsDirty] = useState(false);
+  const [ideIsSaving, setIdeIsSaving] = useState(false);
 
   const [showWorkspaceModal, setShowWorkspaceModal] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
@@ -400,6 +413,125 @@ function MessagesView() {
     wsCancel(activeThreadId);
   };
 
+  // IDE callbacks
+  const ideFetchDirectory = useCallback(
+    async (relativePath?: string) => {
+      if (!activeWorkspaceId) return;
+      try {
+        const url = relativePath
+          ? `/api/workspaces/${activeWorkspaceId}/files?path=${encodeURIComponent(relativePath)}`
+          : `/api/workspaces/${activeWorkspaceId}/files`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          if (relativePath) {
+            setIdeChildEntries((prev) => ({ ...prev, [relativePath]: data.entries }));
+          } else {
+            setIdeRootEntries(data.entries);
+          }
+        }
+      } catch (e) {
+        console.error("Error fetching directory", e);
+      }
+    },
+    [activeWorkspaceId]
+  );
+
+  const ideFetchFileContent = useCallback(
+    async (relativePath: string) => {
+      if (!activeWorkspaceId) return;
+      setIdeIsLoadingFile(true);
+      try {
+        const res = await fetch(
+          `/api/workspaces/${activeWorkspaceId}/files/read?path=${encodeURIComponent(relativePath)}`
+        );
+        if (res.ok) {
+          const data: FileContent = await res.json();
+          setIdeActiveFile(data);
+          setIdeActiveFilePath(relativePath);
+          setIdeEditorContent(data.content);
+          setIdeIsDirty(false);
+        }
+      } catch (e) {
+        console.error("Error fetching file", e);
+      } finally {
+        setIdeIsLoadingFile(false);
+      }
+    },
+    [activeWorkspaceId]
+  );
+
+  const ideHandleSave = useCallback(async () => {
+    if (!activeWorkspaceId || !ideActiveFilePath) return;
+    setIdeIsSaving(true);
+    try {
+      const res = await fetch(`/api/workspaces/${activeWorkspaceId}/files/write`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: ideActiveFilePath, content: ideEditorContent }),
+      });
+      if (res.ok) {
+        const data: FileContent = await res.json();
+        setIdeActiveFile(data);
+        setIdeIsDirty(false);
+      }
+    } catch (e) {
+      console.error("Error saving file", e);
+    } finally {
+      setIdeIsSaving(false);
+    }
+  }, [activeWorkspaceId, ideActiveFilePath, ideEditorContent]);
+
+  const ideHandleToggleFolder = useCallback(
+    async (folderPath: string) => {
+      setIdeExpandedFolders((prev) => {
+        const next = new Set(prev);
+        if (next.has(folderPath)) {
+          next.delete(folderPath);
+        } else {
+          next.add(folderPath);
+          if (!ideChildEntries[folderPath]) {
+            ideFetchDirectory(folderPath);
+          }
+        }
+        return next;
+      });
+    },
+    [ideChildEntries, ideFetchDirectory]
+  );
+
+  const ideHandleFileSelect = useCallback(
+    (entry: FileEntry) => {
+      if (entry.type === "file") {
+        ideFetchFileContent(entry.path);
+      }
+    },
+    [ideFetchFileContent]
+  );
+
+  const ideHandleCloseTab = useCallback(() => {
+    setIdeActiveFile(null);
+    setIdeActiveFilePath("");
+    setIdeEditorContent("");
+    setIdeIsDirty(false);
+  }, []);
+
+  // Reset IDE state when workspace changes
+  useEffect(() => {
+    if (activeWorkspaceId) {
+      setIdeRootEntries([]);
+      setIdeExpandedFolders(new Set());
+      setIdeChildEntries({});
+      setIdeActiveFile(null);
+      setIdeActiveFilePath("");
+      setIdeEditorContent("");
+      setIdeIsDirty(false);
+      if (activeView === 'ide') {
+        ideFetchDirectory();
+      }
+    }
+  }, [activeWorkspaceId, activeView, ideFetchDirectory]);
+
   const handleDeploy = () => {
     setIsDeploying(true);
     setGlobalLogs(prev => [
@@ -463,33 +595,73 @@ function MessagesView() {
 
       {/* DESKTOP VIEW: Show activeView-based content */}
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+          {/* Middle column: ThreadList or FilesPanel */}
           <div className="hidden md:flex md:w-64">
-            <ThreadList
-              threads={threads}
-              activeThreadId={activeThreadId}
-              onSelectThread={(id) => navigate(`/messages/${activeWorkspaceId}/${id}`)}
-              onOpenNewThread={handleCreateThreadQuick}
-              onRenameThread={handleRenameThread}
-              onDeleteThread={handleDeleteThread}
-            />
+            {activeView === 'ide' ? (
+              <div className="flex-1 flex flex-col bg-[#0E0E11] border-r border-white/5 h-screen">
+                <FilesPanel
+                  workspaceId={activeWorkspaceId}
+                  rootEntries={ideRootEntries}
+                  expandedFolders={ideExpandedFolders}
+                  childEntries={ideChildEntries}
+                  activeFilePath={ideActiveFilePath}
+                  isLoading={ideIsLoadingTree}
+                  onFileSelect={ideHandleFileSelect}
+                  onToggleFolder={ideHandleToggleFolder}
+                  onRefresh={() => ideFetchDirectory()}
+                />
+              </div>
+            ) : (
+              <ThreadList
+                threads={threads}
+                activeThreadId={activeThreadId}
+                onSelectThread={(id) => navigate(`/messages/${activeWorkspaceId}/${id}`)}
+                onOpenNewThread={handleCreateThreadQuick}
+                onRenameThread={handleRenameThread}
+                onDeleteThread={handleDeleteThread}
+              />
+            )}
           </div>
 
+          {/* Main area: ChatCanvas or FileEditorPanel + Terminal */}
           <div className="flex-1 flex flex-col overflow-hidden">
-            <ChatCanvas
-              activeThread={activeThread}
-              messages={messages}
-              inputText={inputText}
-              onChangeInput={setInputText}
-              onSendMessage={handleSendMessage}
-              onCancelAgent={handleCancelAgent}
-              onPermissionResponse={handlePermissionResponse}
-              onDeploy={handleDeploy}
-              isDeploying={isDeploying}
-              threadLogs={activeThreadLogs}
-              onClearThreadLogs={handleClearThreadLogs}
-              workspacePath={workspaces.find(w => w.id === activeWorkspaceId)?.path}
-              onToggleMobileNav={() => setShowThreadListOnMobile(!showThreadListOnMobile)}
-            />
+            {activeView === 'ide' ? (
+              <div className="flex-1 flex flex-col overflow-hidden">
+                {/* Editor area */}
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <FileEditorPanel
+                    activeFile={ideActiveFile}
+                    activeFilePath={ideActiveFilePath}
+                    editorContent={ideEditorContent}
+                    isDirty={ideIsDirty}
+                    isSaving={ideIsSaving}
+                    isLoading={ideIsLoadingFile}
+                    onContentChange={(content) => {
+                      setIdeEditorContent(content);
+                      setIdeIsDirty(true);
+                    }}
+                    onSave={ideHandleSave}
+                    onCloseTab={ideHandleCloseTab}
+                  />
+                </div>
+              </div>
+            ) : (
+              <ChatCanvas
+                activeThread={activeThread}
+                messages={messages}
+                inputText={inputText}
+                onChangeInput={setInputText}
+                onSendMessage={handleSendMessage}
+                onCancelAgent={handleCancelAgent}
+                onPermissionResponse={handlePermissionResponse}
+                onDeploy={handleDeploy}
+                isDeploying={isDeploying}
+                threadLogs={activeThreadLogs}
+                onClearThreadLogs={handleClearThreadLogs}
+                workspacePath={workspaces.find(w => w.id === activeWorkspaceId)?.path}
+                onToggleMobileNav={() => setShowThreadListOnMobile(!showThreadListOnMobile)}
+              />
+            )}
           </div>
         </div>
 
@@ -523,17 +695,6 @@ function MessagesView() {
             </div>
           </div>
         </main>
-      )}
-
-      {/* IDE VIEW PANEL */}
-      {activeView === 'ide' && (
-        <div className="flex-1 overflow-hidden">
-          <WorkspaceIdeView
-            workspaceId={activeWorkspaceId}
-            workspacePath={workspaces.find(w => w.id === activeWorkspaceId)?.path}
-            onClose={() => setActiveView('threads')}
-          />
-        </div>
       )}
 
       {/* --- MODAL DIALOGS --- */}

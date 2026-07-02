@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * WorkspaceIdeView — desktop IDE layout
- * Uses shared FileEditorPanel, FilesPanel, TerminalPanel
+ * Uses shared FileEditorPanel, FilesPanel
  */
 
 import React, { useState, useEffect, useCallback } from "react";
@@ -11,7 +11,6 @@ import { X } from "lucide-react";
 import { FileEntry, FileContent } from "../types";
 import FileEditorPanel from "./ide/FileEditorPanel";
 import FilesPanel from "./ide/FilesPanel";
-import TerminalPanel from "./ide/TerminalPanel";
 
 interface WorkspaceIdeViewProps {
   workspaceId: string;
@@ -24,7 +23,7 @@ export default function WorkspaceIdeView({
   workspacePath,
   onClose,
 }: WorkspaceIdeViewProps) {
-  const [activeTab, setActiveTab] = useState<"files" | "editor" | "terminal">("files");
+  const [activeTab, setActiveTab] = useState<"files" | "editor">("files");
   const [rootEntries, setRootEntries] = useState<FileEntry[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [childEntries, setChildEntries] = useState<Record<string, FileEntry[]>>({});
@@ -164,10 +163,10 @@ export default function WorkspaceIdeView({
 
       {/* Tab bar */}
       <div className="flex items-center gap-2 px-4 h-10 border-b border-white/5 bg-[#0B0B0C]">
-        {["files", "editor", "terminal"].map((tab) => (
+        {["files", "editor"].map((tab) => (
           <button
             key={tab}
-            onClick={() => setActiveTab(tab as "files" | "editor" | "terminal")}
+            onClick={() => setActiveTab(tab as "files" | "editor")}
             className={`px-3 py-2 text-xs font-medium rounded-md transition-colors ${
               activeTab === tab
                 ? "bg-emerald-400/10 text-emerald-400"
@@ -211,10 +210,6 @@ export default function WorkspaceIdeView({
             onSave={handleSave}
             onCloseTab={handleCloseTab}
           />
-        )}
-
-        {activeTab === "terminal" && (
-          <TerminalPanel workspaceId={workspaceId} />
         )}
       </div>
     </div>

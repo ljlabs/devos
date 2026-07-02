@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { MessageSquare, FolderOpen, Code, Terminal } from "lucide-react";
+import { MessageSquare, FolderOpen, Code } from "lucide-react";
 import { IdePanel } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -32,7 +32,6 @@ const TABS: NavTab[] = [
   { id: "chat",     label: "CHAT",     icon: MessageSquare, requiresThread: true },
   { id: "files",    label: "FILES",    icon: FolderOpen,    requiresThread: false },
   { id: "editor",   label: "EDITOR",   icon: Code,          requiresThread: false },
-  { id: "terminal", label: "TERMINAL", icon: Terminal,      requiresThread: true },
 ];
 
 // ---------------------------------------------------------------------------
@@ -41,7 +40,7 @@ const TABS: NavTab[] = [
 
 /**
  * Fixed bottom navigation bar for mobile IDE panels.
- * Four tabs: CHAT, FILES, EDITOR, TERMINAL.
+ * Three tabs: CHAT, FILES, EDITOR.
  * Active tab is highlighted with emerald accent color.
  */
 export default function MobileBottomNav({
@@ -65,7 +64,7 @@ export default function MobileBottomNav({
               }
             }}
             disabled={disabled}
-            className={`flex flex-col items-center justify-center h-full w-1/4 transition-all duration-100 ${
+            className={`flex flex-col items-center justify-center h-full w-1/3 transition-all duration-100 ${
               isActive
                 ? "text-emerald-400 font-bold scale-95"
                 : disabled

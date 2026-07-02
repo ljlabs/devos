@@ -30,15 +30,6 @@ vi.mock("../../src/components/FileExplorer", () => ({
   default: (props: any) => <div data-testid="file-explorer" />,
 }));
 
-// Mock TerminalDisplay
-vi.mock("../../src/components/TerminalDisplay", () => ({
-  default: (props: any) => (
-    <div data-testid="terminal-display">
-      <button onClick={props.onClose} data-testid="terminal-close">Close</button>
-    </div>
-  ),
-}));
-
 // Mock fetch
 const mockFetch = vi.fn();
 global.fetch = mockFetch as any;
@@ -102,18 +93,6 @@ describe("MobileIdeView", () => {
       });
       render(<MobileIdeView {...defaultProps} panel="files" />);
       expect(mockFetch).toHaveBeenCalledWith("/api/workspaces/ws-1/files");
-    });
-  });
-
-  describe("Terminal panel", () => {
-    it("renders terminal display", () => {
-      render(<MobileIdeView {...defaultProps} panel="terminal" />);
-      expect(screen.getByTestId("terminal-display")).toBeInTheDocument();
-    });
-
-    it("shows Terminal header", () => {
-      render(<MobileIdeView {...defaultProps} panel="terminal" />);
-      expect(screen.getByText("Terminal")).toBeInTheDocument();
     });
   });
 

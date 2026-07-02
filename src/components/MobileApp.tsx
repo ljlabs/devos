@@ -469,7 +469,7 @@ export default function MobileApp({ initialWorkspaceId, initialThreadId }: { ini
               onBack={() => { setCurrentView('threads'); navigate(`/messages/${activeWorkspaceId}`); }}
             />
           )}
-          {(idePanel === 'files' || idePanel === 'editor' || idePanel === 'terminal') && (
+          {(idePanel === 'files' || idePanel === 'editor') && (
             <MobileIdeView
               panel={idePanel}
               workspaceId={activeWorkspaceId}

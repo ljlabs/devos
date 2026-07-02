@@ -115,7 +115,7 @@ export default function ThreadsPage() {
             }}
           />
         )}
-        {(idePanel === "files" || idePanel === "editor" || idePanel === "terminal") && (
+        {(idePanel === "files" || idePanel === "editor") && (
           <MobileIdeView
             panel={idePanel}
             workspaceId={workspaceId || ""}

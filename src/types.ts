@@ -83,7 +83,7 @@ export interface DatabaseSchema {
 // File Explorer / IDE types
 // ---------------------------------------------------------------------------
 
-export type IdePanel = "chat" | "files" | "editor" | "terminal";
+export type IdePanel = "chat" | "files" | "editor";
 
 /**
  * File or directory entry returned by the file explorer API.

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * MobileIdeView — mobile IDE layout
- * Uses shared FileEditorPanel, FilesPanel, TerminalPanel
+ * Uses shared FileEditorPanel, FilesPanel
  */
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
@@ -11,7 +11,6 @@ import { ArrowLeft } from "lucide-react";
 import { IdePanel, FileEntry, FileContent } from "../types";
 import FileEditorPanel from "./ide/FileEditorPanel";
 import FilesPanel from "./ide/FilesPanel";
-import TerminalPanel from "./ide/TerminalPanel";
 
 interface MobileIdeViewProps {
   panel: IdePanel;
@@ -148,7 +147,6 @@ export default function MobileIdeView({
     switch (panel) {
       case "files": return "Explorer";
       case "editor": return activeFile ? activeFilePath.split("/").pop() || "Editor" : "Editor";
-      case "terminal": return "Terminal";
       default: return "";
     }
   };
@@ -198,14 +196,6 @@ export default function MobileIdeView({
           }}
           onSave={handleSave}
           onCloseTab={handleCloseTab}
-        />
-      )}
-
-      {panel === "terminal" && (
-        <TerminalPanel
-          workspaceId={workspaceId}
-          threadTitle={threadTitle}
-          threadLogs={threadLogs}
         />
       )}
 
