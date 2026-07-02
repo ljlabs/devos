@@ -62,7 +62,7 @@ export function getMessageContent(msg: Message): { type: string; content: any } 
   if (msg.type === "agent_message_chunk") {
     return {
       type: "agent_chunk",
-      content: raw.delta?.text || raw.text || raw.content || "",
+      content: typeof raw.delta?.text === 'string' ? raw.delta.text : (typeof raw.text === 'string' ? raw.text : (typeof raw.content === 'string' ? raw.content : "")),
     };
   }
 
@@ -101,7 +101,7 @@ export function getMessageContent(msg: Message): { type: string; content: any } 
     if (update.sessionUpdate === "agent_message_chunk") {
       return {
         type: "agent_chunk",
-        content: update.content?.text || update.content || "",
+        content: typeof update.content?.text === 'string' ? update.content.text : (typeof update.content === 'string' ? update.content : ""),
       };
     }
 
@@ -134,7 +134,7 @@ export function getMessageContent(msg: Message): { type: string; content: any } 
       if (textContent) {
         return {
           type: "agent_text",
-          content: textContent.content?.text || textContent.text || "",
+          content: typeof textContent.content?.text === 'string' ? textContent.content.text : (typeof textContent.text === 'string' ? textContent.text : ""),
         };
       }
     }
