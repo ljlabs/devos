@@ -43,6 +43,35 @@
   background: #475569;
 }
 
+/* Subtle scrollbar - matches UI style, less noticeable */
+.scrollbar-subtle::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 3px;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Firefox scrollbar styling */
+.scrollbar-subtle {
+  scrollbar-color: #1e293b transparent;
+  scrollbar-width: thin;
+}
+
+.scrollbar-subtle:hover {
+  scrollbar-color: #334155 transparent;
+}
+
 /* Mobile-optimized viewport meta - ensures proper scaling */
 html {
   -webkit-text-size-adjust: 100%;

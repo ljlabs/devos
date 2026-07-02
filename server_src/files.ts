@@ -198,6 +198,128 @@ export function readFile(
 }
 
 /**
+ * Create a new file or directory within the workspace.
+ *
+ * @param workspaceRoot Absolute path to the workspace root directory
+ * @param relativePath Relative path from workspace root
+ * @param type "file" or "directory"
+ * @returns FileEntry of the created entry
+ */
+export function createEntry(
+  workspaceRoot: string,
+  relativePath: string,
+  type: "file" | "directory"
+): FileEntry {
+  const absPath = resolveWithinWorkspace(workspaceRoot, relativePath);
+
+  if (!absPath) {
+    throw new Error("Invalid path: attempted traversal outside workspace");
+  }
+
+  if (fs.existsSync(absPath)) {
+    throw new Error(`Already exists: ${relativePath}`);
+  }
+
+  if (type === "directory") {
+    fs.mkdirSync(absPath, { recursive: true });
+  } else {
+    const dir = path.dirname(absPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(absPath, "", "utf-8");
+  }
+
+  const stat = fs.statSync(absPath);
+  const name = path.basename(relativePath);
+
+  return {
+    name,
+    path: relativePath.split(path.sep).join("/"),
+    type,
+    size: type === "file" ? 0 : undefined,
+    modified: stat.mtime.toISOString(),
+  };
+}
+
+/**
+ * Rename a file or directory within the workspace.
+ *
+ * @param workspaceRoot Absolute path to the workspace root directory
+ * @param oldRelativePath Current relative path from workspace root
+ * @param newName New base name (not a full path)
+ * @returns FileEntry of the renamed entry
+ */
+export function renameEntry(
+  workspaceRoot: string,
+  oldRelativePath: string,
+  newName: string
+): FileEntry {
+  const oldAbsPath = resolveWithinWorkspace(workspaceRoot, oldRelativePath);
+
+  if (!oldAbsPath) {
+    throw new Error("Invalid path: attempted traversal outside workspace");
+  }
+
+  if (!fs.existsSync(oldAbsPath)) {
+    throw new Error(`Not found: ${oldRelativePath}`);
+  }
+
+  const parentDir = path.dirname(oldAbsPath);
+  const newAbsPath = path.join(parentDir, newName);
+
+  // Verify the new path is still within workspace
+  const newRelative = path.relative(
+    path.resolve(workspaceRoot),
+    newAbsPath
+  );
+  if (newRelative.startsWith("..") || path.isAbsolute(newRelative)) {
+    throw new Error("Invalid name: would escape workspace");
+  }
+
+  if (fs.existsSync(newAbsPath)) {
+    throw new Error(`Already exists: ${newName}`);
+  }
+
+  fs.renameSync(oldAbsPath, newAbsPath);
+
+  const stat = fs.statSync(newAbsPath);
+  const oldParent = path.dirname(oldRelativePath);
+  const newRelativePath = oldParent === "." ? newName : `${oldParent}/${newName}`;
+
+  return {
+    name: newName,
+    path: newRelativePath.split(path.sep).join("/"),
+    type: stat.isDirectory() ? "directory" : "file",
+    size: stat.isFile() ? stat.size : undefined,
+    modified: stat.mtime.toISOString(),
+  };
+}
+
+/**
+ * Delete a file or directory within the workspace.
+ *
+ * @param workspaceRoot Absolute path to the workspace root directory
+ * @param relativePath Relative path from workspace root
+ */
+export function deleteEntry(
+  workspaceRoot: string,
+  relativePath: string
+): void {
+  const absPath = resolveWithinWorkspace(workspaceRoot, relativePath);
+
+  if (!absPath) {
+    throw new Error("Invalid path: attempted traversal outside workspace");
+  }
+
+  if (!fs.existsSync(absPath)) {
+    throw new Error(`Not found: ${relativePath}`);
+  }
+
+  fs.rmSync(absPath, { recursive: true, force: true });
+}
+
+/**
  * Write content to a file within the workspace.
  * Creates parent directories if they don't exist.
  *

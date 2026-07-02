@@ -8,7 +8,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { ArrowLeft } from "lucide-react";
-import { IdePanel, FileEntry, FileContent } from "../types";
+import { IdePanel, FileEntry, FileContent, Workspace } from "../types";
 import FileEditorPanel from "./ide/FileEditorPanel";
 import FilesPanel from "./ide/FilesPanel";
 
@@ -37,6 +37,20 @@ export default function MobileIdeView({
   const [editorContent, setEditorContent] = useState<string>("");
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [workspacePath, setWorkspacePath] = useState<string>("");
+  const [headerExpanded, setHeaderExpanded] = useState(false);
+
+  // Fetch workspace path
+  useEffect(() => {
+    if (!workspaceId) return;
+    fetch("/api/workspaces")
+      .then((res) => res.json())
+      .then((workspaces: Workspace[]) => {
+        const ws = workspaces.find((w) => w.id === workspaceId);
+        if (ws) setWorkspacePath(ws.path);
+      })
+      .catch(() => {});
+  }, [workspaceId]);
 
   const fetchDirectory = useCallback(async (relativePath?: string) => {
     if (!workspaceId) return;
@@ -118,6 +132,77 @@ export default function MobileIdeView({
     [childEntries, fetchDirectory]
   );
 
+  const handleCreateEntry = useCallback(
+    async (parentPath: string, name: string, type: "file" | "directory") => {
+      const fullPath = parentPath ? `${parentPath}/${name}` : name;
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/files/create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: fullPath, type }),
+        });
+        if (res.ok) {
+          if (parentPath) await fetchDirectory(parentPath);
+          else await fetchDirectory();
+          if (type === "file") await fetchFileContent(fullPath);
+        }
+      } catch (e) {
+        console.error("Error creating entry", e);
+      }
+    },
+    [workspaceId, fetchDirectory, fetchFileContent]
+  );
+
+  const handleRenameEntry = useCallback(
+    async (oldPath: string, newName: string) => {
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/files/rename`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ oldPath, newName }),
+        });
+        if (res.ok) {
+          const parentPath = oldPath.substring(0, oldPath.lastIndexOf("/"));
+          if (parentPath) await fetchDirectory(parentPath);
+          else await fetchDirectory();
+          const newPath = parentPath ? `${parentPath}/${newName}` : newName;
+          if (activeFilePath === oldPath) {
+            setActiveFilePath(newPath);
+          }
+        }
+      } catch (e) {
+        console.error("Error renaming entry", e);
+      }
+    },
+    [workspaceId, fetchDirectory, activeFilePath]
+  );
+
+  const handleDeleteEntry = useCallback(
+    async (entryPath: string) => {
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/files/delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: entryPath }),
+        });
+        if (res.ok) {
+          const parentPath = entryPath.substring(0, entryPath.lastIndexOf("/"));
+          if (parentPath) await fetchDirectory(parentPath);
+          else await fetchDirectory();
+          if (activeFilePath === entryPath) {
+            setActiveFile(null);
+            setActiveFilePath("");
+            setEditorContent("");
+            setIsDirty(false);
+          }
+        }
+      } catch (e) {
+        console.error("Error deleting entry", e);
+      }
+    },
+    [workspaceId, fetchDirectory, activeFilePath]
+  );
+
   const handleFileSelect = useCallback(
     (entry: FileEntry) => {
       if (entry.type === "file") {
@@ -146,7 +231,7 @@ export default function MobileIdeView({
   const getHeaderTitle = () => {
     switch (panel) {
       case "files": return "Explorer";
-      case "editor": return activeFile ? activeFilePath.split("/").pop() || "Editor" : "Editor";
+      case "editor": return activeFile ? activeFilePath || "Editor" : "Editor";
       default: return "";
     }
   };
@@ -157,19 +242,30 @@ export default function MobileIdeView({
       <div className="flex items-center gap-3 px-3 h-12 border-b border-white/5 bg-[#0E0E11] flex-shrink-0">
         <button
           onClick={onBack}
-          className="p-1.5 rounded-md hover:bg-white/5 text-slate-400 hover:text-white transition-colors"
+          className="p-1.5 rounded-md hover:bg-white/5 text-slate-400 hover:text-white transition-colors flex-shrink-0"
         >
           <ArrowLeft size={18} />
         </button>
-        <span className="text-xs font-mono font-bold tracking-widest text-slate-500 uppercase">
-          {getHeaderTitle()}
-        </span>
+        {panel === "editor" && activeFile ? (
+          <span
+            className={`text-xs font-mono text-slate-500 cursor-pointer select-text break-all leading-relaxed ${headerExpanded ? "" : "line-clamp-1"}`}
+            onClick={() => setHeaderExpanded(!headerExpanded)}
+            title={workspacePath && activeFilePath ? `${workspacePath}/${activeFilePath}` : activeFilePath}
+          >
+            {workspacePath && activeFilePath ? `${workspacePath}/${activeFilePath}` : activeFilePath}
+          </span>
+        ) : (
+          <span className="text-xs font-mono font-bold tracking-widest text-slate-500 uppercase">
+            {getHeaderTitle()}
+          </span>
+        )}
       </div>
 
       {/* Panels */}
       {panel === "files" && (
         <FilesPanel
           workspaceId={workspaceId || ""}
+          workspacePath={workspacePath}
           rootEntries={rootEntries}
           expandedFolders={expandedFolders}
           childEntries={childEntries}
@@ -178,6 +274,9 @@ export default function MobileIdeView({
           onFileSelect={handleFileSelect}
           onToggleFolder={handleToggleFolder}
           onRefresh={() => fetchDirectory()}
+          onCreateEntry={handleCreateEntry}
+          onRenameEntry={handleRenameEntry}
+          onDeleteEntry={handleDeleteEntry}
         />
       )}
 
@@ -187,6 +286,7 @@ export default function MobileIdeView({
           activeFilePath={activeFilePath}
           editorContent={editorContent}
           isDirty={isDirty}
+          workspacePath={workspacePath}
           isSaving={isSaving}
           isLoading={isLoadingFile}
           isMobile={true}

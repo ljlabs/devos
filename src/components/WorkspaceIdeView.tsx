@@ -144,6 +144,97 @@ export default function WorkspaceIdeView({
     [childEntries, fetchDirectory]
   );
 
+  const handleCreateEntry = useCallback(
+    async (parentPath: string, name: string, type: "file" | "directory") => {
+      const fullPath = parentPath ? `${parentPath}/${name}` : name;
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/files/create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: fullPath, type }),
+        });
+        if (res.ok) {
+          // Refresh the parent directory
+          if (parentPath) {
+            await fetchDirectory(parentPath);
+          } else {
+            await fetchDirectory();
+          }
+          // If it's a file, open it
+          if (type === "file") {
+            await fetchFileContent(fullPath);
+          }
+        }
+      } catch (e) {
+        console.error("Error creating entry", e);
+      }
+    },
+    [workspaceId, fetchDirectory, fetchFileContent]
+  );
+
+  const handleRenameEntry = useCallback(
+    async (oldPath: string, newName: string) => {
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/files/rename`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ oldPath, newName }),
+        });
+        if (res.ok) {
+          // Refresh the parent directory
+          const parentPath = oldPath.substring(0, oldPath.lastIndexOf("/"));
+          if (parentPath) {
+            await fetchDirectory(parentPath);
+          } else {
+            await fetchDirectory();
+          }
+          // Update the open tab if the renamed file was open
+          const newPath = parentPath ? `${parentPath}/${newName}` : newName;
+          setEditorTabs((prev) =>
+            prev.map((t) =>
+              t.path === oldPath ? { ...t, path: newPath } : t
+            )
+          );
+        }
+      } catch (e) {
+        console.error("Error renaming entry", e);
+      }
+    },
+    [workspaceId, fetchDirectory]
+  );
+
+  const handleDeleteEntry = useCallback(
+    async (entryPath: string) => {
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/files/delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: entryPath }),
+        });
+        if (res.ok) {
+          // Refresh the parent directory
+          const parentPath = entryPath.substring(0, entryPath.lastIndexOf("/"));
+          if (parentPath) {
+            await fetchDirectory(parentPath);
+          } else {
+            await fetchDirectory();
+          }
+          // Close the tab if the deleted file was open
+          setEditorTabs((prev) => {
+            const index = prev.findIndex((t) => t.path === entryPath);
+            if (index >= 0) {
+              return prev.filter((_, i) => i !== index);
+            }
+            return prev;
+          });
+        }
+      } catch (e) {
+        console.error("Error deleting entry", e);
+      }
+    },
+    [workspaceId, fetchDirectory]
+  );
+
   const handleFileSelect = useCallback(
     (entry: FileEntry) => {
       if (entry.type === "file") {
@@ -219,6 +310,7 @@ export default function WorkspaceIdeView({
         {activeTab === "files" && (
           <FilesPanel
             workspaceId={workspaceId}
+            workspacePath={workspacePath}
             rootEntries={rootEntries}
             expandedFolders={expandedFolders}
             childEntries={childEntries}
@@ -227,6 +319,9 @@ export default function WorkspaceIdeView({
             onFileSelect={handleFileSelect}
             onToggleFolder={handleToggleFolder}
             onRefresh={() => fetchDirectory()}
+            onCreateEntry={handleCreateEntry}
+            onRenameEntry={handleRenameEntry}
+            onDeleteEntry={handleDeleteEntry}
           />
         )}
 
@@ -234,6 +329,7 @@ export default function WorkspaceIdeView({
           <FileEditorPanel
             tabs={editorTabs}
             activeTabIndex={activeTabIndex}
+            workspacePath={workspacePath}
             isSaving={isSaving}
             isLoading={isLoadingFile}
             onContentChange={(content) => {

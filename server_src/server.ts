@@ -24,7 +24,7 @@ import { DatabaseSchema, Workspace, Thread, Message } from "../src/types";
 import { logInfo, logError, getLogs } from "../src/logger";
 import { SqliteDb } from "./db.sqlite";
 import * as git from "./git";
-import { listDirectory, readFile, writeFile } from "./files";
+import { listDirectory, readFile, writeFile, createEntry, renameEntry, deleteEntry } from "./files";
 import { initWebSocket, broadcastToThread, broadcastThreadUpdate, broadcastAck, type WsHandlers } from "./wsServer";
 
 dotenv.config();
@@ -570,6 +570,109 @@ app.put("/api/workspaces/:workspaceId/files/write", (req, res) => {
   }
 });
 
+/**
+ * Create a new file or directory
+ * POST /api/workspaces/:workspaceId/files/create
+ * Body: { path: string, type: "file" | "directory" }
+ */
+app.post("/api/workspaces/:workspaceId/files/create", (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const { path: relativePath, type } = req.body;
+
+    if (!relativePath || typeof relativePath !== "string") {
+      return res.status(400).json({ error: "path (string) required" });
+    }
+
+    if (type !== "file" && type !== "directory") {
+      return res.status(400).json({ error: "type must be 'file' or 'directory'" });
+    }
+
+    const result = createEntry(ws.path, relativePath, type);
+    logInfo("server", `Created ${type}: ${relativePath}`, req.params.workspaceId);
+    res.json(result);
+  } catch (e: any) {
+    if (e.message.includes("traversal")) {
+      return res.status(400).json({ error: e.message });
+    }
+    if (e.message.includes("Already exists")) {
+      return res.status(409).json({ error: e.message });
+    }
+    res.status(500).json({ error: e.message || "Internal server error" });
+  }
+});
+
+/**
+ * Rename a file or directory
+ * POST /api/workspaces/:workspaceId/files/rename
+ * Body: { oldPath: string, newName: string }
+ */
+app.post("/api/workspaces/:workspaceId/files/rename", (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const { oldPath, newName } = req.body;
+
+    if (!oldPath || typeof oldPath !== "string") {
+      return res.status(400).json({ error: "oldPath (string) required" });
+    }
+
+    if (!newName || typeof newName !== "string") {
+      return res.status(400).json({ error: "newName (string) required" });
+    }
+
+    const result = renameEntry(ws.path, oldPath, newName);
+    logInfo("server", `Renamed ${oldPath} → ${newName}`, req.params.workspaceId);
+    res.json(result);
+  } catch (e: any) {
+    if (e.message.includes("traversal") || e.message.includes("escape")) {
+      return res.status(400).json({ error: e.message });
+    }
+    if (e.message.includes("Not found")) {
+      return res.status(404).json({ error: e.message });
+    }
+    if (e.message.includes("Already exists")) {
+      return res.status(409).json({ error: e.message });
+    }
+    res.status(500).json({ error: e.message || "Internal server error" });
+  }
+});
+
+/**
+ * Delete a file or directory
+ * POST /api/workspaces/:workspaceId/files/delete
+ * Body: { path: string }
+ */
+app.post("/api/workspaces/:workspaceId/files/delete", (req, res) => {
+  try {
+    const db = readDb();
+    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const { path: relativePath } = req.body;
+
+    if (!relativePath || typeof relativePath !== "string") {
+      return res.status(400).json({ error: "path (string) required" });
+    }
+
+    deleteEntry(ws.path, relativePath);
+    logInfo("server", `Deleted: ${relativePath}`, req.params.workspaceId);
+    res.json({ ok: true });
+  } catch (e: any) {
+    if (e.message.includes("traversal")) {
+      return res.status(400).json({ error: e.message });
+    }
+    if (e.message.includes("Not found")) {
+      return res.status(404).json({ error: e.message });
+    }
+    res.status(500).json({ error: e.message || "Internal server error" });
+  }
+});
 // ---------------------------------------------------------------------------
 // Routes — Git
 // ---------------------------------------------------------------------------

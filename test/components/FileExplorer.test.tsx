@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import FileExplorer from "../../src/components/FileExplorer";
 import { FileEntry } from "../../src/types";
 
@@ -127,4 +128,5 @@ describe("FileExplorer", () => {
     const childDiv = container.querySelector(".pl-4");
     expect(childDiv).toBeTruthy();
   });
+
 });

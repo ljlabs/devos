@@ -32,6 +32,7 @@ interface FileEditorPanelProps {
   activeTabIndex?: number;
   onTabChange?: (index: number) => void;
   // Shared props
+  workspacePath?: string;
   isSaving: boolean;
   isLoading: boolean;
   isMobile?: boolean;
@@ -48,6 +49,7 @@ export default function FileEditorPanel({
   tabs,
   activeTabIndex = 0,
   onTabChange,
+  workspacePath,
   isSaving,
   isLoading,
   isMobile = false,
@@ -138,11 +140,11 @@ export default function FileEditorPanel({
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Tab bar */}
-      <div className="flex items-center bg-[#0E0E11] h-10 border-b border-white/5 overflow-x-auto">
+      {/* Tab bar - with horizontal scroll */}
+      <div className="flex items-center bg-[#0E0E11] h-10 border-b border-white/5 overflow-x-auto overflow-y-hidden scrollbar-subtle">
         {isMultiTab ? (
           // Multi-tab mode: render tab buttons
-          <>
+          <div className="flex items-center min-w-min">
             {tabs.map((tab, index) => (
               <div
                 key={tab.path}
@@ -174,14 +176,14 @@ export default function FileEditorPanel({
                 </button>
               </div>
             ))}
-          </>
+          </div>
         ) : (
           // Single-file mode (mobile): show file name and close button
           <div className="flex items-center justify-between w-full px-4">
             <div className="flex items-center gap-2 min-w-0">
               <FileText size={14} className="text-emerald-400 flex-shrink-0" />
-              <span className="text-[11px] font-mono font-medium text-white truncate">
-                {currentPath?.split("/").pop()}
+              <span className="text-[11px] font-mono font-medium text-white truncate select-text cursor-text" title={currentPath}>
+                {currentPath}
               </span>
               {currentIsDirty && (
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title="Unsaved changes" />
@@ -247,39 +249,44 @@ export default function FileEditorPanel({
 
       {/* Editor actions toolbar (for multi-tab mode) */}
       {isMultiTab && (
-        <div className="flex items-center justify-end gap-1 px-2 h-8 bg-[#0E0E11] border-b border-white/5">
-          <button
-            onClick={() => {
-              editorRef.current?.focus();
-              setTimeout(() => editorRef.current?.trigger("keyboard", "undo"), 0);
-            }}
-            className="p-1 text-slate-500 hover:text-white active:text-emerald-400 transition-colors"
-            title="Undo (Ctrl+Z)"
-          >
-            <Undo2 size={14} />
-          </button>
-          <button
-            onClick={() => {
-              editorRef.current?.focus();
-              setTimeout(() => editorRef.current?.trigger("keyboard", "redo"), 0);
-            }}
-            className="p-1 text-slate-500 hover:text-white active:text-emerald-400 transition-colors"
-            title="Redo (Ctrl+Shift+Z)"
-          >
-            <Redo2 size={14} />
-          </button>
-          <button
-            onClick={onSave}
-            disabled={!currentIsDirty || isSaving}
-            className={`p-1 transition-colors ${
-              currentIsDirty
-                ? "text-emerald-400 hover:text-emerald-300 active:scale-95"
-                : "text-slate-700"
-            }`}
-            title="Save (Ctrl+S)"
-          >
-            <Save size={14} />
-          </button>
+        <div className="flex items-center justify-between px-2 h-8 bg-[#0E0E11] border-b border-white/5">
+          <span className="text-[10px] font-mono text-slate-500 truncate select-text cursor-text" title={workspacePath && currentPath ? `${workspacePath}/${currentPath}` : currentPath}>
+            {workspacePath && currentPath ? `${workspacePath}/${currentPath}` : currentPath}
+          </span>
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <button
+              onClick={() => {
+                editorRef.current?.focus();
+                setTimeout(() => editorRef.current?.trigger("keyboard", "undo"), 0);
+              }}
+              className="p-1 text-slate-500 hover:text-white active:text-emerald-400 transition-colors"
+              title="Undo (Ctrl+Z)"
+            >
+              <Undo2 size={14} />
+            </button>
+            <button
+              onClick={() => {
+                editorRef.current?.focus();
+                setTimeout(() => editorRef.current?.trigger("keyboard", "redo"), 0);
+              }}
+              className="p-1 text-slate-500 hover:text-white active:text-emerald-400 transition-colors"
+              title="Redo (Ctrl+Shift+Z)"
+            >
+              <Redo2 size={14} />
+            </button>
+            <button
+              onClick={onSave}
+              disabled={!currentIsDirty || isSaving}
+              className={`p-1 transition-colors ${
+                currentIsDirty
+                  ? "text-emerald-400 hover:text-emerald-300 active:scale-95"
+                  : "text-slate-700"
+              }`}
+              title="Save (Ctrl+S)"
+            >
+              <Save size={14} />
+            </button>
+          </div>
         </div>
       )}
 

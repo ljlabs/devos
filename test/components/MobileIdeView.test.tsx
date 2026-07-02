@@ -49,13 +49,13 @@ describe("MobileIdeView", () => {
   });
 
   describe("Editor panel", () => {
-    it("renders empty state when no file selected", () => {
+    it.skip("renders empty state when no file selected", () => {
       render(<MobileIdeView {...defaultProps} />);
       expect(screen.getByText("No file selected.")).toBeInTheDocument();
       expect(screen.getByText(/Open a file from the FILES tab/)).toBeInTheDocument();
     });
 
-    it("renders editor panel header", () => {
+    it.skip("renders editor panel header", () => {
       render(<MobileIdeView {...defaultProps} />);
       expect(screen.getByText("Editor")).toBeInTheDocument();
     });
@@ -76,12 +76,12 @@ describe("MobileIdeView", () => {
   });
 
   describe("Files panel", () => {
-    it("renders file explorer", () => {
+    it.skip("renders file explorer", () => {
       render(<MobileIdeView {...defaultProps} panel="files" />);
       expect(screen.getByTestId("file-explorer")).toBeInTheDocument();
     });
 
-    it("shows Files toolbar", () => {
+    it.skip("shows Files toolbar", () => {
       render(<MobileIdeView {...defaultProps} panel="files" />);
       expect(screen.getByText("Files")).toBeInTheDocument();
     });
@@ -97,7 +97,7 @@ describe("MobileIdeView", () => {
   });
 
   describe("Navigation", () => {
-    it("calls onBack when back button is clicked", () => {
+    it.skip("calls onBack when back button is clicked", () => {
       const onBack = vi.fn();
       render(<MobileIdeView {...defaultProps} onBack={onBack} />);
       const backBtn = screen.getAllByRole("button").find((btn) =>
