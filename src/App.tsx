@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Routes, Route, useParams, useNavigate, Navigate } from "react-router-dom";
+import { Routes, Route, useParams, useNavigate, Navigate, useLocation } from "react-router-dom";
 import {
   History
 } from "lucide-react";
@@ -23,7 +23,11 @@ import FileEditorPanel from "./components/ide/FileEditorPanel";
 function MessagesView() {
   const { workspaceId, threadId } = useParams<{ workspaceId?: string; threadId?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+
+  // Determine if we're on the IDE route
+  const isIdeRoute = location.pathname.startsWith("/ide/");
 
   // Desktop state (always declared, even on mobile)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -34,7 +38,7 @@ function MessagesView() {
   const [wsConnected, setWsConnected] = useState(false);
 
   // Navigation / views
-  const [activeView, setActiveView] = useState<'threads' | 'activity' | 'ide'>('threads');
+  const [activeView, setActiveView] = useState<'threads' | 'activity' | 'ide'>(isIdeRoute ? 'ide' : 'threads');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showThreadListOnMobile, setShowThreadListOnMobile] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
@@ -43,7 +47,7 @@ function MessagesView() {
   const threadSseRef = useRef<EventSource | null>(null);
   const globalSseRef = useRef<EventSource | null>(null);
 
-  // IDE state (lifted from WorkspaceIdeView)
+  // IDE state
   const [ideRootEntries, setIdeRootEntries] = useState<FileEntry[]>([]);
   const [ideExpandedFolders, setIdeExpandedFolders] = useState<Set<string>>(new Set());
   const [ideChildEntries, setIdeChildEntries] = useState<Record<string, FileEntry[]>>({});
@@ -51,7 +55,6 @@ function MessagesView() {
   const [ideIsLoadingFile, setIdeIsLoadingFile] = useState(false);
   const [ideIsSaving, setIdeIsSaving] = useState(false);
 
-  // Multi-tab editor state
   interface EditorTab {
     path: string;
     file: FileContent | null;
@@ -142,6 +145,7 @@ function MessagesView() {
       if (res.ok) {
         const data = await res.json();
         setThreads(data);
+        if (isIdeRoute) return;
         if (!threadId && data.length > 0) {
           navigate(`/messages/${wsId}/${data[0].id}`, { replace: true });
         } else if (data.length === 0) {
@@ -151,7 +155,7 @@ function MessagesView() {
     } catch (e) {
       console.error("API error fetching threads", e);
     }
-  }, [threadId, navigate]);
+  }, [threadId, navigate, isIdeRoute]);
 
   const fetchMessages = useCallback(async (tid: string) => {
     if (!tid) return;
@@ -447,7 +451,6 @@ function MessagesView() {
     async (relativePath: string) => {
       if (!activeWorkspaceId) return;
 
-      // Check if file is already open in a tab
       const existingIndex = ideTabs.findIndex(t => t.path === relativePath);
       if (existingIndex >= 0) {
         setIdeActiveTabIndex(existingIndex);
@@ -468,7 +471,7 @@ function MessagesView() {
             isDirty: false,
           };
           setIdeTabs(prev => [...prev, newTab]);
-          setIdeActiveTabIndex(ideTabs.length); // index of new tab
+          setIdeActiveTabIndex(ideTabs.length);
         }
       } catch (e) {
         console.error("Error fetching file", e);
@@ -532,7 +535,6 @@ function MessagesView() {
   const ideHandleCloseTab = useCallback((indexToClose: number) => {
     setIdeTabs(prev => {
       const next = prev.filter((_, i) => i !== indexToClose);
-      // Adjust active tab index if needed
       setIdeActiveTabIndex(prevIdx => {
         if (indexToClose < prevIdx) return prevIdx - 1;
         if (indexToClose === prevIdx) return Math.min(prevIdx, next.length - 1);
@@ -554,11 +556,11 @@ function MessagesView() {
       setIdeChildEntries({});
       setIdeTabs([]);
       setIdeActiveTabIndex(0);
-      if (activeView === 'ide') {
+      if (isIdeRoute) {
         ideFetchDirectory();
       }
     }
-  }, [activeWorkspaceId, activeView, ideFetchDirectory]);
+  }, [activeWorkspaceId, isIdeRoute, ideFetchDirectory]);
 
   const handleDeploy = () => {
     setIsDeploying(true);
@@ -593,7 +595,13 @@ function MessagesView() {
           onEditWorkspace={handleOpenEditWorkspace}
           onDeleteWorkspace={handleDeleteWorkspace}
           activeView={activeView}
-          onSelectView={setActiveView}
+          onSelectView={(view) => {
+            if (view === 'ide') {
+              navigate(`/ide/${activeWorkspaceId}${activeThreadId ? `/${activeThreadId}` : ''}`);
+            } else {
+              setActiveView(view);
+            }
+          }}
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
           onOpenSettings={() => setShowSettingsModal(true)}
@@ -625,7 +633,7 @@ function MessagesView() {
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
           {/* Middle column: ThreadList or FilesPanel */}
           <div className="hidden md:flex md:w-64">
-            {activeView === 'ide' ? (
+            {isIdeRoute ? (
               <div className="flex-1 flex flex-col bg-[#0E0E11] border-r border-white/5 h-screen">
                 <FilesPanel
                   workspaceId={activeWorkspaceId}
@@ -651,28 +659,23 @@ function MessagesView() {
             )}
           </div>
 
-          {/* Main area: ChatCanvas or FileEditorPanel + Terminal */}
+          {/* Main area: ChatCanvas or FileEditorPanel */}
           <div className="flex-1 flex flex-col overflow-hidden">
-            {activeView === 'ide' ? (
-              <div className="flex-1 flex flex-col overflow-hidden">
-                {/* Editor area */}
-                <div className="flex-1 flex flex-col overflow-hidden">
-                  <FileEditorPanel
-                    tabs={ideTabs}
-                    activeTabIndex={ideActiveTabIndex}
-                    isSaving={ideIsSaving}
-                    isLoading={ideIsLoadingFile}
-                    onContentChange={(content) => {
-                      setIdeTabs(prev => prev.map((t, i) =>
-                        i === ideActiveTabIndex ? { ...t, content, isDirty: true } : t
-                      ));
-                    }}
-                    onSave={ideHandleSave}
-                    onCloseTab={ideHandleCloseTab}
-                    onTabChange={ideHandleTabChange}
-                  />
-                </div>
-              </div>
+            {isIdeRoute ? (
+              <FileEditorPanel
+                tabs={ideTabs}
+                activeTabIndex={ideActiveTabIndex}
+                isSaving={ideIsSaving}
+                isLoading={ideIsLoadingFile}
+                onContentChange={(content) => {
+                  setIdeTabs(prev => prev.map((t, i) =>
+                    i === ideActiveTabIndex ? { ...t, content, isDirty: true } : t
+                  ));
+                }}
+                onSave={ideHandleSave}
+                onCloseTab={ideHandleCloseTab}
+                onTabChange={ideHandleTabChange}
+              />
             ) : (
               <ChatCanvas
                 activeThread={activeThread}
@@ -766,6 +769,8 @@ export default function App() {
       <Route path="/" element={<ResponsiveRoute mobile={<WorkspacesPage />} desktop={<MessagesView />} />} />
       <Route path="/messages/:workspaceId" element={<ResponsiveRoute mobile={<ThreadsPage />} desktop={<MessagesView />} />} />
       <Route path="/messages/:workspaceId/:threadId" element={<ResponsiveRoute mobile={<ChatPage />} desktop={<MessagesView />} />} />
+      <Route path="/ide/:workspaceId" element={<MessagesView />} />
+      <Route path="/ide/:workspaceId/:threadId" element={<MessagesView />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
