@@ -47,13 +47,19 @@ function MessagesView() {
   const [ideRootEntries, setIdeRootEntries] = useState<FileEntry[]>([]);
   const [ideExpandedFolders, setIdeExpandedFolders] = useState<Set<string>>(new Set());
   const [ideChildEntries, setIdeChildEntries] = useState<Record<string, FileEntry[]>>({});
-  const [ideActiveFile, setIdeActiveFile] = useState<FileContent | null>(null);
-  const [ideActiveFilePath, setIdeActiveFilePath] = useState<string>("");
   const [ideIsLoadingTree, setIdeIsLoadingTree] = useState(false);
   const [ideIsLoadingFile, setIdeIsLoadingFile] = useState(false);
-  const [ideEditorContent, setIdeEditorContent] = useState<string>("");
-  const [ideIsDirty, setIdeIsDirty] = useState(false);
   const [ideIsSaving, setIdeIsSaving] = useState(false);
+
+  // Multi-tab editor state
+  interface EditorTab {
+    path: string;
+    file: FileContent | null;
+    content: string;
+    isDirty: boolean;
+  }
+  const [ideTabs, setIdeTabs] = useState<EditorTab[]>([]);
+  const [ideActiveTabIndex, setIdeActiveTabIndex] = useState<number>(0);
 
   const [showWorkspaceModal, setShowWorkspaceModal] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
@@ -440,6 +446,14 @@ function MessagesView() {
   const ideFetchFileContent = useCallback(
     async (relativePath: string) => {
       if (!activeWorkspaceId) return;
+
+      // Check if file is already open in a tab
+      const existingIndex = ideTabs.findIndex(t => t.path === relativePath);
+      if (existingIndex >= 0) {
+        setIdeActiveTabIndex(existingIndex);
+        return;
+      }
+
       setIdeIsLoadingFile(true);
       try {
         const res = await fetch(
@@ -447,10 +461,14 @@ function MessagesView() {
         );
         if (res.ok) {
           const data: FileContent = await res.json();
-          setIdeActiveFile(data);
-          setIdeActiveFilePath(relativePath);
-          setIdeEditorContent(data.content);
-          setIdeIsDirty(false);
+          const newTab: EditorTab = {
+            path: relativePath,
+            file: data,
+            content: data.content,
+            isDirty: false,
+          };
+          setIdeTabs(prev => [...prev, newTab]);
+          setIdeActiveTabIndex(ideTabs.length); // index of new tab
         }
       } catch (e) {
         console.error("Error fetching file", e);
@@ -458,29 +476,31 @@ function MessagesView() {
         setIdeIsLoadingFile(false);
       }
     },
-    [activeWorkspaceId]
+    [activeWorkspaceId, ideTabs]
   );
 
   const ideHandleSave = useCallback(async () => {
-    if (!activeWorkspaceId || !ideActiveFilePath) return;
+    const tab = ideTabs[ideActiveTabIndex];
+    if (!activeWorkspaceId || !tab || !tab.path) return;
     setIdeIsSaving(true);
     try {
       const res = await fetch(`/api/workspaces/${activeWorkspaceId}/files/write`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: ideActiveFilePath, content: ideEditorContent }),
+        body: JSON.stringify({ path: tab.path, content: tab.content }),
       });
       if (res.ok) {
         const data: FileContent = await res.json();
-        setIdeActiveFile(data);
-        setIdeIsDirty(false);
+        setIdeTabs(prev => prev.map((t, i) =>
+          i === ideActiveTabIndex ? { ...t, file: data, isDirty: false } : t
+        ));
       }
     } catch (e) {
       console.error("Error saving file", e);
     } finally {
       setIdeIsSaving(false);
     }
-  }, [activeWorkspaceId, ideActiveFilePath, ideEditorContent]);
+  }, [activeWorkspaceId, ideTabs, ideActiveTabIndex]);
 
   const ideHandleToggleFolder = useCallback(
     async (folderPath: string) => {
@@ -509,11 +529,21 @@ function MessagesView() {
     [ideFetchFileContent]
   );
 
-  const ideHandleCloseTab = useCallback(() => {
-    setIdeActiveFile(null);
-    setIdeActiveFilePath("");
-    setIdeEditorContent("");
-    setIdeIsDirty(false);
+  const ideHandleCloseTab = useCallback((indexToClose: number) => {
+    setIdeTabs(prev => {
+      const next = prev.filter((_, i) => i !== indexToClose);
+      // Adjust active tab index if needed
+      setIdeActiveTabIndex(prevIdx => {
+        if (indexToClose < prevIdx) return prevIdx - 1;
+        if (indexToClose === prevIdx) return Math.min(prevIdx, next.length - 1);
+        return prevIdx;
+      });
+      return next;
+    });
+  }, []);
+
+  const ideHandleTabChange = useCallback((index: number) => {
+    setIdeActiveTabIndex(index);
   }, []);
 
   // Reset IDE state when workspace changes
@@ -522,10 +552,8 @@ function MessagesView() {
       setIdeRootEntries([]);
       setIdeExpandedFolders(new Set());
       setIdeChildEntries({});
-      setIdeActiveFile(null);
-      setIdeActiveFilePath("");
-      setIdeEditorContent("");
-      setIdeIsDirty(false);
+      setIdeTabs([]);
+      setIdeActiveTabIndex(0);
       if (activeView === 'ide') {
         ideFetchDirectory();
       }
@@ -604,7 +632,7 @@ function MessagesView() {
                   rootEntries={ideRootEntries}
                   expandedFolders={ideExpandedFolders}
                   childEntries={ideChildEntries}
-                  activeFilePath={ideActiveFilePath}
+                  activeFilePath={ideTabs[ideActiveTabIndex]?.path || ""}
                   isLoading={ideIsLoadingTree}
                   onFileSelect={ideHandleFileSelect}
                   onToggleFolder={ideHandleToggleFolder}
@@ -630,18 +658,18 @@ function MessagesView() {
                 {/* Editor area */}
                 <div className="flex-1 flex flex-col overflow-hidden">
                   <FileEditorPanel
-                    activeFile={ideActiveFile}
-                    activeFilePath={ideActiveFilePath}
-                    editorContent={ideEditorContent}
-                    isDirty={ideIsDirty}
+                    tabs={ideTabs}
+                    activeTabIndex={ideActiveTabIndex}
                     isSaving={ideIsSaving}
                     isLoading={ideIsLoadingFile}
                     onContentChange={(content) => {
-                      setIdeEditorContent(content);
-                      setIdeIsDirty(true);
+                      setIdeTabs(prev => prev.map((t, i) =>
+                        i === ideActiveTabIndex ? { ...t, content, isDirty: true } : t
+                      ));
                     }}
                     onSave={ideHandleSave}
                     onCloseTab={ideHandleCloseTab}
+                    onTabChange={ideHandleTabChange}
                   />
                 </div>
               </div>

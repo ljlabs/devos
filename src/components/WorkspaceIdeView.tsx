@@ -12,6 +12,13 @@ import { FileEntry, FileContent } from "../types";
 import FileEditorPanel from "./ide/FileEditorPanel";
 import FilesPanel from "./ide/FilesPanel";
 
+interface EditorTab {
+  path: string;
+  file: FileContent | null;
+  content: string;
+  isDirty: boolean;
+}
+
 interface WorkspaceIdeViewProps {
   workspaceId: string;
   workspacePath?: string;
@@ -27,13 +34,13 @@ export default function WorkspaceIdeView({
   const [rootEntries, setRootEntries] = useState<FileEntry[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [childEntries, setChildEntries] = useState<Record<string, FileEntry[]>>({});
-  const [activeFile, setActiveFile] = useState<FileContent | null>(null);
-  const [activeFilePath, setActiveFilePath] = useState<string>("");
   const [isLoadingTree, setIsLoadingTree] = useState(false);
   const [isLoadingFile, setIsLoadingFile] = useState(false);
-  const [editorContent, setEditorContent] = useState<string>("");
-  const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Multi-tab editor state
+  const [editorTabs, setEditorTabs] = useState<EditorTab[]>([]);
+  const [activeTabIndex, setActiveTabIndex] = useState<number>(0);
 
   const fetchDirectory = useCallback(
     async (relativePath?: string) => {
@@ -61,6 +68,15 @@ export default function WorkspaceIdeView({
   const fetchFileContent = useCallback(
     async (relativePath: string) => {
       if (!workspaceId) return;
+
+      // Check if file is already open in a tab
+      const existingIndex = editorTabs.findIndex(t => t.path === relativePath);
+      if (existingIndex >= 0) {
+        setActiveTabIndex(existingIndex);
+        setActiveTab("editor");
+        return;
+      }
+
       setIsLoadingFile(true);
       try {
         const res = await fetch(
@@ -68,10 +84,14 @@ export default function WorkspaceIdeView({
         );
         if (res.ok) {
           const data: FileContent = await res.json();
-          setActiveFile(data);
-          setActiveFilePath(relativePath);
-          setEditorContent(data.content);
-          setIsDirty(false);
+          const newTab: EditorTab = {
+            path: relativePath,
+            file: data,
+            content: data.content,
+            isDirty: false,
+          };
+          setEditorTabs(prev => [...prev, newTab]);
+          setActiveTabIndex(editorTabs.length); // index of new tab
           setActiveTab("editor");
         }
       } catch (e) {
@@ -80,29 +100,31 @@ export default function WorkspaceIdeView({
         setIsLoadingFile(false);
       }
     },
-    [workspaceId]
+    [workspaceId, editorTabs]
   );
 
   const handleSave = useCallback(async () => {
-    if (!workspaceId || !activeFilePath) return;
+    const tab = editorTabs[activeTabIndex];
+    if (!workspaceId || !tab || !tab.path) return;
     setIsSaving(true);
     try {
       const res = await fetch(`/api/workspaces/${workspaceId}/files/write`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: activeFilePath, content: editorContent }),
+        body: JSON.stringify({ path: tab.path, content: tab.content }),
       });
       if (res.ok) {
         const data: FileContent = await res.json();
-        setActiveFile(data);
-        setIsDirty(false);
+        setEditorTabs(prev => prev.map((t, i) =>
+          i === activeTabIndex ? { ...t, file: data, isDirty: false } : t
+        ));
       }
     } catch (e) {
       console.error("Error saving file", e);
     } finally {
       setIsSaving(false);
     }
-  }, [workspaceId, activeFilePath, editorContent]);
+  }, [workspaceId, editorTabs, activeTabIndex]);
 
   const handleToggleFolder = useCallback(
     async (folderPath: string) => {
@@ -131,11 +153,20 @@ export default function WorkspaceIdeView({
     [fetchFileContent]
   );
 
-  const handleCloseTab = useCallback(() => {
-    setActiveFile(null);
-    setActiveFilePath("");
-    setEditorContent("");
-    setIsDirty(false);
+  const handleCloseTab = useCallback((indexToClose: number) => {
+    setEditorTabs(prev => {
+      const next = prev.filter((_, i) => i !== indexToClose);
+      setActiveTabIndex(prevIdx => {
+        if (indexToClose < prevIdx) return prevIdx - 1;
+        if (indexToClose === prevIdx) return Math.min(prevIdx, next.length - 1);
+        return prevIdx;
+      });
+      return next;
+    });
+  }, []);
+
+  const handleTabChange = useCallback((index: number) => {
+    setActiveTabIndex(index);
   }, []);
 
   useEffect(() => {
@@ -143,6 +174,8 @@ export default function WorkspaceIdeView({
       setRootEntries([]);
       setExpandedFolders(new Set());
       setChildEntries({});
+      setEditorTabs([]);
+      setActiveTabIndex(0);
       fetchDirectory();
     }
   }, [workspaceId, fetchDirectory]);
@@ -174,7 +207,9 @@ export default function WorkspaceIdeView({
             }`}
           >
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
-            {tab === "editor" && isDirty && <span className="w-1 h-1 bg-amber-400 rounded-full ml-1 inline-block" />}
+            {tab === "editor" && editorTabs.some(t => t.isDirty) && (
+              <span className="w-1 h-1 bg-amber-400 rounded-full ml-1 inline-block" />
+            )}
           </button>
         ))}
       </div>
@@ -187,7 +222,7 @@ export default function WorkspaceIdeView({
             rootEntries={rootEntries}
             expandedFolders={expandedFolders}
             childEntries={childEntries}
-            activeFilePath={activeFilePath}
+            activeFilePath={editorTabs[activeTabIndex]?.path || ""}
             isLoading={isLoadingTree}
             onFileSelect={handleFileSelect}
             onToggleFolder={handleToggleFolder}
@@ -197,18 +232,18 @@ export default function WorkspaceIdeView({
 
         {activeTab === "editor" && (
           <FileEditorPanel
-            activeFile={activeFile}
-            activeFilePath={activeFilePath}
-            editorContent={editorContent}
-            isDirty={isDirty}
+            tabs={editorTabs}
+            activeTabIndex={activeTabIndex}
             isSaving={isSaving}
             isLoading={isLoadingFile}
             onContentChange={(content) => {
-              setEditorContent(content);
-              setIsDirty(true);
+              setEditorTabs(prev => prev.map((t, i) =>
+                i === activeTabIndex ? { ...t, content, isDirty: true } : t
+              ));
             }}
             onSave={handleSave}
             onCloseTab={handleCloseTab}
+            onTabChange={handleTabChange}
           />
         )}
       </div>
