@@ -4,12 +4,15 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { History } from "lucide-react";
 import MobileWorkspaceSidebar from "./MobileWorkspaceSidebar";
 import MobileThreadList from "./MobileThreadList";
 import MobileChatCanvas from "./MobileChatCanvas";
+import MobileBottomNav from "./MobileBottomNav";
+import MobileIdeView from "./MobileIdeView";
 import { WorkspaceModal, SettingsModal } from "./Dialogs";
-import { Workspace, Thread, Message } from "../types";
+import { Workspace, Thread, Message, IdePanel } from "../types";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useOptimisticMessages } from "../hooks/useOptimisticMessages";
 
@@ -20,16 +23,22 @@ import { useOptimisticMessages } from "../hooks/useOptimisticMessages";
  * - Touch-optimized navigation
  * - Proper keyboard handling for mobile browsers
  */
-export default function MobileApp() {
+export default function MobileApp({ initialWorkspaceId, initialThreadId }: { initialWorkspaceId?: string; initialThreadId?: string }) {
+  const navigate = useNavigate();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>("");
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>(initialWorkspaceId || "");
   const [threads, setThreads] = useState<Thread[]>([]);
-  const [activeThreadId, setActiveThreadId] = useState<string>("");
+  const [activeThreadId, setActiveThreadId] = useState<string>(initialThreadId || "");
   const [inputText, setInputText] = useState<string>("");
   const [wsConnected, setWsConnected] = useState(false);
 
-  // Mobile-specific navigation state
-  const [currentView, setCurrentView] = useState<'workspaces' | 'threads' | 'chat'>('workspaces');
+  // Mobile-specific navigation state — seed from URL if params provided
+  const [currentView, setCurrentView] = useState<'workspaces' | 'threads' | 'chat'>(
+    initialThreadId ? 'chat' : initialWorkspaceId ? 'threads' : 'workspaces'
+  );
+
+  // IDE panel state (active within the chat view)
+  const [idePanel, setIdePanel] = useState<IdePanel>('chat');
   const [isDeploying, setIsDeploying] = useState(false);
   const [globalLogs, setGlobalLogs] = useState<string[]>([]);
   const [threadLogs, setThreadLogs] = useState<Record<string, any[]>>({});
@@ -113,12 +122,9 @@ export default function MobileApp() {
       if (res.ok) {
         const data = await res.json();
         setThreads(data);
-        if (data.length > 0) {
-          const currentExists = data.some((t: Thread) => t.id === activeThreadId);
-          if (!currentExists) {
-            setActiveThreadId(data[0].id);
-          }
-        } else {
+        // Don't auto-select a thread — let the user pick from the list.
+        // Only clear if the currently active thread no longer exists.
+        if (activeThreadId && !data.some((t: Thread) => t.id === activeThreadId)) {
           setActiveThreadId("");
           clearOptimistic();
           setConfirmed([]);
@@ -414,6 +420,7 @@ export default function MobileApp() {
           onSelectWorkspace={(id) => {
             setActiveWorkspaceId(id);
             setCurrentView('threads');
+            navigate(`/messages/${id}`);
           }}
           onOpenNewWorkspace={handleOpenNewWorkspace}
           onEditWorkspace={handleOpenEditWorkspace}
@@ -432,31 +439,53 @@ export default function MobileApp() {
           onSelectThread={(id) => {
             setActiveThreadId(id);
             setCurrentView('chat');
+            navigate(`/messages/${activeWorkspaceId}/${id}`);
           }}
           onCreateThread={handleCreateThread}
           onRenameThread={handleRenameThread}
           onDeleteThread={handleDeleteThread}
-          onBack={() => setCurrentView('workspaces')}
+          onBack={() => { setCurrentView('workspaces'); navigate('/messages'); }}
           onEditWorkspace={handleOpenEditWorkspace}
         />
       )}
 
-      {/* Chat view */}
+      {/* Chat/IDE view with bottom navigation */}
       {currentView === 'chat' && (
-        <MobileChatCanvas
-          activeThread={activeThread}
-          messages={messages}
-          inputText={inputText}
-          onChangeInput={setInputText}
-          onSendMessage={handleSendMessage}
-          onCancelAgent={handleCancelAgent}
-          onPermissionResponse={handlePermissionResponse}
-          onDeploy={handleDeploy}
-          isDeploying={isDeploying}
-          threadLogs={activeThreadLogs}
-          workspacePath={workspaces.find(w => w.id === activeWorkspaceId)?.path}
-          onBack={() => setCurrentView('threads')}
-        />
+        <>
+          {/* IDE Panels */}
+          {idePanel === 'chat' && (
+            <MobileChatCanvas
+              activeThread={activeThread}
+              messages={messages}
+              inputText={inputText}
+              onChangeInput={setInputText}
+              onSendMessage={handleSendMessage}
+              onCancelAgent={handleCancelAgent}
+              onPermissionResponse={handlePermissionResponse}
+              onDeploy={handleDeploy}
+              isDeploying={isDeploying}
+              threadLogs={activeThreadLogs}
+              workspacePath={workspaces.find(w => w.id === activeWorkspaceId)?.path}
+              onBack={() => { setCurrentView('threads'); navigate(`/messages/${activeWorkspaceId}`); }}
+            />
+          )}
+          {(idePanel === 'files' || idePanel === 'editor') && (
+            <MobileIdeView
+              panel={idePanel}
+              workspaceId={activeWorkspaceId}
+              threadTitle={activeThread?.title}
+              threadLogs={activeThreadLogs}
+              onBack={() => setIdePanel('chat')}
+            />
+          )}
+
+          {/* Bottom navigation bar */}
+          <MobileBottomNav
+            active={idePanel}
+            onChange={setIdePanel}
+            hasActiveThread={!!activeThread}
+          />
+        </>
       )}
 
       {/* Dialogs */}

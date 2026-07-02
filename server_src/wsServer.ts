@@ -11,6 +11,8 @@ import { WebSocketServer as WSServer, WebSocket } from "ws";
 import type { Server } from "http";
 import type { Message, Thread } from "../src/types";
 import { logInfo } from "../src/logger";
+import { terminalManager } from "./terminal";
+import os from "os";
 
 // ---------------------------------------------------------------------------
 // Subscription tracking
@@ -21,6 +23,9 @@ const threadSubscribers = new Map<string, Set<WebSocket>>();
 
 /** WebSocket → set of threadIds it's subscribed to */
 const clientSubscriptions = new Map<WebSocket, Set<string>>();
+
+/** terminalId → the WebSocket currently receiving its output */
+const terminalClients = new Map<string, WebSocket>();
 
 // ---------------------------------------------------------------------------
 // Handler callbacks — provided by server.ts to avoid circular imports
@@ -217,6 +222,81 @@ export function initWebSocket(
           break;
         }
 
+        // -----------------------------------------------------------------
+        // Terminal messages — PTY sessions managed via WebSocket
+        // -----------------------------------------------------------------
+
+        case "terminal_create": {
+          const { terminalId, cwd, cols, rows } = msg;
+          if (!terminalId) {
+            sendJson(ws, { type: "error", message: "terminalId required" });
+            return;
+          }
+
+          // If terminal already exists, just re-wire output to this client
+          if (terminalManager.has(terminalId)) {
+            terminalClients.set(terminalId, ws);
+            logInfo("ws", `terminal reconnected: ${terminalId}`, "global");
+            sendJson(ws, { type: "terminal_created", terminalId });
+            break;
+          }
+
+          const termCwd = cwd || os.homedir();
+          terminalManager.create(terminalId, termCwd, cols || 80, rows || 24);
+          logInfo("ws", `terminal created: ${terminalId} (cwd=${termCwd})`, "global");
+
+          // Wire PTY output back to this WebSocket client
+          const session = terminalManager.get(terminalId);
+          if (session) {
+            session.pty.onData((data: string) => {
+              const client = terminalClients.get(terminalId);
+              if (client) sendJson(client, { type: "terminal_output", terminalId, data });
+            });
+            session.pty.onExit(({ exitCode }: { exitCode: number }) => {
+              const client = terminalClients.get(terminalId);
+              if (client) sendJson(client, { type: "terminal_exit", terminalId, exitCode });
+              terminalClients.delete(terminalId);
+              logInfo("ws", `terminal exited: ${terminalId} (code=${exitCode})`, "global");
+            });
+            terminalClients.set(terminalId, ws);
+          }
+          sendJson(ws, { type: "terminal_created", terminalId });
+          break;
+        }
+
+        case "terminal_data": {
+          const { terminalId, data } = msg;
+          if (!terminalId || data === undefined) {
+            sendJson(ws, { type: "error", message: "terminalId and data required" });
+            return;
+          }
+          terminalManager.write(terminalId, data);
+          break;
+        }
+
+        case "terminal_resize": {
+          const { terminalId, cols, rows } = msg;
+          if (!terminalId || !cols || !rows) {
+            sendJson(ws, { type: "error", message: "terminalId, cols, and rows required" });
+            return;
+          }
+          terminalManager.resize(terminalId, cols, rows);
+          break;
+        }
+
+        case "terminal_close": {
+          const { terminalId } = msg;
+          if (!terminalId) {
+            sendJson(ws, { type: "error", message: "terminalId required" });
+            return;
+          }
+          terminalManager.close(terminalId);
+          terminalClients.delete(terminalId);
+          sendJson(ws, { type: "terminal_closed", terminalId });
+          logInfo("ws", `terminal closed: ${terminalId}`, "global");
+          break;
+        }
+
         default:
           sendJson(ws, { type: "error", message: `unknown message type: ${msg.type}` });
       }
@@ -235,6 +315,15 @@ export function initWebSocket(
         }
         clientSubscriptions.delete(ws);
       }
+
+      // Remove this client from terminal output routing, but keep terminals alive
+      for (const [termId, client] of terminalClients) {
+        if (client === ws) {
+          terminalClients.delete(termId);
+          logInfo("ws", `terminal output detached: ${termId} (client disconnect)`, "global");
+        }
+      }
+
       logInfo("ws", "WebSocket connection closed", "global");
     });
 

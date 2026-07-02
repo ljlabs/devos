@@ -11,25 +11,29 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepare": "git config core.hooksPath .githooks"
+    "postinstall": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
+    "@monaco-editor/react": "^4.7.0",
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.1.14",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.0.4",
     "better-sqlite3": "^12.11.1",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
+    "monaco-editor": "^0.55.1",
     "motion": "^12.23.24",
+    "node-pty": "^1.1.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.1",
     "remark-gfm": "^4.0.1",
     "vite": "^6.2.3",
-    "ws": "^8.18.0"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

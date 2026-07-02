@@ -121,8 +121,9 @@ export function useWebSocket({
       }, delay);
     };
 
-    ws.onerror = (err) => {
-      console.error("[ws] error:", err);
+    ws.onerror = () => {
+      // Error is always followed by onclose which handles reconnection.
+      // Suppress noisy logs during reconnect backoff.
     };
   }, []);
 

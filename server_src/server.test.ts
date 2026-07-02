@@ -1505,3 +1505,212 @@ describe("toolName extraction — session/request_permission missing _meta (Las 
     expect(checkAllowedPattern(californiaCommand, toolName, bashPatterns)).toBe(true);
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// File Explorer API — directory listing and file reading
+// ---------------------------------------------------------------------------
+
+describe("File Explorer API — /api/workspaces/:workspaceId/files", () => {
+  let testWsDir: string;
+  let testWsId: string;
+
+  beforeAll(() => {
+    // Create a test workspace directory structure
+    testWsDir = fs.mkdtempSync(path.join(os.tmpdir(), "devos-file-explorer-"));
+
+    // Create test files and directories
+    fs.writeFileSync(path.join(testWsDir, "package.json"), '{"name": "test"}');
+    fs.writeFileSync(path.join(testWsDir, "README.md"), "# Test Project");
+    fs.writeFileSync(path.join(testWsDir, "index.ts"), "export const hello = 'world';");
+
+    const srcDir = path.join(testWsDir, "src");
+    fs.mkdirSync(srcDir);
+    fs.writeFileSync(path.join(srcDir, "main.ts"), "console.log('main');");
+    fs.writeFileSync(path.join(srcDir, "utils.ts"), "export function util() {}");
+
+    const nestedDir = path.join(srcDir, "components");
+    fs.mkdirSync(nestedDir);
+    fs.writeFileSync(path.join(nestedDir, "Button.tsx"), "export const Button = () => <>Button</>;");
+
+    // Create excluded directories (should not appear in listings)
+    const nodeModules = path.join(testWsDir, "node_modules");
+    fs.mkdirSync(nodeModules);
+    fs.writeFileSync(path.join(nodeModules, "some-package.js"), "// package code");
+
+    const gitDir = path.join(testWsDir, ".git");
+    fs.mkdirSync(gitDir);
+    fs.writeFileSync(path.join(gitDir, "config"), "[core]");
+
+    // Hidden file (should not appear)
+    fs.writeFileSync(path.join(testWsDir, ".env"), "SECRET=123");
+
+    // Register workspace in DB
+    testWsId = `ws-test-${Date.now()}`;
+    seedDb({
+      workspaces: [{ id: testWsId, name: "Test Workspace", path: testWsDir }],
+      threads: [],
+      messages: [],
+      allowedPatterns: [],
+    });
+  });
+
+  afterAll(() => {
+    if (fs.existsSync(testWsDir)) fs.rmSync(testWsDir, { recursive: true, force: true });
+  });
+
+  it("lists root directory contents", async () => {
+    const res = await request(app).get(`/api/workspaces/${testWsId}/files`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toBeDefined();
+    expect(Array.isArray(res.body.entries)).toBe(true);
+
+    // Should have our test files and directories
+    const names = res.body.entries.map((e: any) => e.name);
+    expect(names).toContain("package.json");
+    expect(names).toContain("README.md");
+    expect(names).toContain("index.ts");
+    expect(names).toContain("src"); // directory
+
+    // Should NOT have excluded items
+    expect(names).not.toContain("node_modules");
+    expect(names).not.toContain(".git");
+    expect(names).not.toContain(".env");
+
+    // Directories should come first
+    const types = res.body.entries.map((e: any) => e.type);
+    const firstFileIdx = types.indexOf("file");
+    const lastDirIdx = types.lastIndexOf("directory");
+    if (firstFileIdx !== -1 && lastDirIdx !== -1) {
+      expect(lastDirIdx).toBeLessThan(firstFileIdx);
+    }
+  });
+
+  it("lists subdirectory contents with path parameter", async () => {
+    const res = await request(app).get(`/api/workspaces/${testWsId}/files?path=src`);
+
+    expect(res.status).toBe(200);
+
+    const names = res.body.entries.map((e: any) => e.name);
+    expect(names).toContain("main.ts");
+    expect(names).toContain("utils.ts");
+    expect(names).toContain("components"); // nested directory
+
+    // Entries should have correct relative paths
+    const mainTs = res.body.entries.find((e: any) => e.name === "main.ts");
+    expect(mainTs.path).toBe("src/main.ts");
+  });
+
+  it("lists deeply nested directory", async () => {
+    const res = await request(app).get(`/api/workspaces/${testWsId}/files?path=src/components`);
+
+    expect(res.status).toBe(200);
+
+    const names = res.body.entries.map((e: any) => e.name);
+    expect(names).toContain("Button.tsx");
+
+    const buttonTsx = res.body.entries.find((e: any) => e.name === "Button.tsx");
+    expect(buttonTsx.path).toBe("src/components/Button.tsx");
+  });
+
+  it("returns 404 for non-existent workspace", async () => {
+    const res = await request(app).get("/api/workspaces/nonexistent/files");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 404 for non-existent directory path", async () => {
+    const res = await request(app).get(`/api/workspaces/${testWsId}/files?path=nonexistent`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 400 for path traversal attempt", async () => {
+  	const res = await request(app)
+  		.get(`/api/workspaces/${testWsId}/files`)
+  		.query({ path: "../../../etc" }); // Attempt to traverse outside workspace
+
+  	expect(res.status).toBe(400);
+  	expect(res.body.error).toMatch(/traversal/i);
+  });
+
+  it("returns entries with correct metadata", async () => {
+  	const res = await request(app)
+  		.get(`/api/workspaces/${testWsId}/files`)
+  		.query({ path: "" });
+
+  	expect(res.status).toBe(200);
+
+  	const pkgJson = res.body.entries.find((e: any) => e.name === "package.json");
+  	expect(pkgJson).toBeDefined();
+  	expect(pkgJson.type).toBe("file");
+  	expect(typeof pkgJson.size).toBe("number");
+  	expect(pkgJson.modified).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/); // ISO timestamp
+
+  	const srcDir = res.body.entries.find((e: any) => e.name === "src");
+  	expect(srcDir.type).toBe("directory");
+  	expect(srcDir.size).toBeUndefined(); // directories don't have size
+  });
+});
+
+
+describe("File Explorer API — /api/workspaces/:workspaceId/files/read", () => {
+	let testWsDir: string;
+	let testWsId: string;
+
+	beforeAll(() => {
+		testWsDir = fs.mkdtempSync(path.join(os.tmpdir(), "devos-file-read-"));
+
+		fs.writeFileSync(path.join(testWsDir, "simple.txt"), "Hello World\nLine 2\nLine 3");
+
+		// Create a larger file (>1MB would be truncated but we'll test with smaller)
+		const mediumContent = "// Comment\n".repeat(100) + "\nexport function foo() {\n  return 'bar';\n}";
+		fs.writeFileSync(path.join(testWsDir, "medium.ts"), mediumContent);
+
+		testWsId = `ws-read-${Date.now()}`;
+		seedDb({
+			workspaces: [{ id: testWsId, name: "Read Test WS", path: testWsDir }],
+			threads: [],
+			messages: [],
+			allowedPatterns: [],
+		});
+	});
+
+	afterAll(() => {
+		if (fs.existsSync(testWsDir)) fs.rmSync(testWsDir, { recursive: true, force: true });
+	});
+
+	it("reads a simple text file", async () => {
+		const res = await request(app)
+			.get(`/api/workspaces/${testWsId}/files/read`)
+			.query({ path: "simple.txt" });
+
+		expect(res.status).toBe(200);
+		expect(res.body.content).toBe("Hello World\nLine 2\nLine 3");
+		expect(res.body.lines).toBe(3);
+		expect(res.body.size).toBeGreaterThan(0);
+		expect(res.body.truncated).not.toBe(true);
+	});
+
+	it("reads a TypeScript file with correct line count", async () => {
+		const res = await request(app)
+			.get(`/api/workspaces/${testWsId}/files/read`)
+			.query({ path: "medium.ts" });
+
+		expect(res.status).toBe(200);
+		expect(res.body.content.length > 0).toBe(true);
+		expect(typeof res.body.lines === "number").toBe(true);
+		expect(res.body.lines > 50).toBe(true);
+		expect(res.body.truncated).toBeFalsy();
+	});
+
+	it("returns correct path in response", async () => {
+		const resp = await request(app)
+			.get(`/api/workspaces/${testWsId}/files/read`)
+			.query({ path: "simple.txt" });
+
+		expect(resp.status).toBe(200);
+		expect(resp.body.path).toBe("simple.txt");
+	});
+});

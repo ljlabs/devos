@@ -7,6 +7,11 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
+.xterm-viewport {
+  touch-action: pan-y !important;
+  -webkit-overflow-scrolling: touch;
+}
+
 #root {
   width: 100%;
   height: 100%;
@@ -59,6 +64,7 @@ body {
   /* Do NOT use -webkit-overflow-scrolling: touch on body, causes flicker */
   -webkit-touch-callout: none;
   -webkit-user-select: none;
+  user-select: none;
 }
 
 #root {
