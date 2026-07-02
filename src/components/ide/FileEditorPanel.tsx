@@ -7,7 +7,7 @@
  * Supports multiple tabs on desktop.
  */
 
-import React, { useCallback, useRef } from "react";
+import React, { useCallback, useRef, useEffect } from "react";
 import { FileText, Save, Undo2, Redo2, X, Type } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { FileContent } from "../../types";
@@ -57,6 +57,17 @@ export default function FileEditorPanel({
 }: FileEditorPanelProps) {
   const editorRef = useRef<any>(null);
   const [selectMode, setSelectMode] = React.useState(false);
+
+  // Suppress Monaco's benign CancellationError on unmount — known @monaco-editor/react issue
+  useEffect(() => {
+    const prev = console.error;
+    console.error = (...args: any[]) => {
+      const msg = String(args[0] ?? "");
+      if (msg.includes("Canceled") && msg.includes("cancel")) return;
+      prev.apply(console, args);
+    };
+    return () => { console.error = prev; };
+  }, []);
 
   // Determine if we're in multi-tab mode
   const isMultiTab = tabs && tabs.length > 0;

@@ -128,7 +128,7 @@ export default function ThreadsPage() {
       <MobileBottomNav
         active={idePanel}
         onChange={setIdePanel}
-        hasActiveThread={false}
+        hasActiveThread={true}
       />
 
       {/* Workspace modal */}
