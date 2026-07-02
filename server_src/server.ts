@@ -231,7 +231,41 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
       type: raw.method ?? (raw.result !== undefined ? "response" : "unknown"),
     };
 
+    let accumulated = false;
+
     updateDb((db) => {
+      // --- Streaming chunk accumulation ---
+      // When an agent_message_chunk arrives, append its text to the last
+      // message with the same messageId instead of creating a new record.
+      const chunkUpdate = raw.params?.update;
+      const isChunk = raw.method === "session/update"
+        && chunkUpdate?.sessionUpdate === "agent_message_chunk"
+        && chunkUpdate?.messageId;
+
+      if (isChunk) {
+        const messageId = chunkUpdate.messageId;
+        const newText = chunkUpdate.content?.text ?? "";
+
+        // Find the last message for this thread with the same messageId
+        for (let i = db.messages.length - 1; i >= 0; i--) {
+          const existing = db.messages[i];
+          if (existing.threadId !== threadId) continue;
+          if (existing.raw?.params?.update?.messageId !== messageId) continue;
+
+          // Append the new text chunk
+          const existingUpdate = existing.raw.params.update;
+          if (existingUpdate.content && typeof existingUpdate.content === "object") {
+            existingUpdate.content.text = (existingUpdate.content.text || "") + newText;
+          }
+          existing.timestamp = msg.timestamp;
+          accumulated = true;
+          // Broadcast the accumulated message so streaming UI updates
+          broadcastToThread(threadId, existing);
+          return;
+        }
+        // No existing message with this messageId — fall through to create one
+      }
+
       // Store the raw ACP message verbatim
       db.messages.push(msg);
 
@@ -288,7 +322,10 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
     });
 
     // Broadcast to WebSocket subscribers after DB write
-    broadcastToThread(threadId, msg);
+    // (skip if already broadcast during chunk accumulation)
+    if (!accumulated) {
+      broadcastToThread(threadId, msg);
+    }
     const updatedThread = readDb().threads.find((t) => t.id === threadId);
     if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
   });

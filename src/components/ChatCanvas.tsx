@@ -538,7 +538,7 @@ export default function ChatCanvas({
             // Tool event (call, result, status)
             if (parsed.type === "tool_event") {
               const update = parsed.content;
-              const { status, title, kind, toolCallId, rawOutput, content, rawInput, sessionUpdate } = update;
+              const { status, title, kind, toolCallId, rawOutput, rawInput, sessionUpdate } = update;
 
               // Skip intermediate tool_call_update messages that don't have status or output yet
               if (sessionUpdate === "tool_call_update" && !rawOutput && !status) {
@@ -598,8 +598,8 @@ export default function ChatCanvas({
               return null;
             }
 
-            return null;
-          })
+              return null;
+            })
         )}
 
         {/* Anchor point to trigger scroll */}

@@ -26,7 +26,7 @@ function getMessageContent(msg: Message): { type: string; content: any } | null 
   if (msg.type === "agent_message_chunk") {
     return {
       type: "agent_chunk",
-      content: raw.delta?.text || raw.text || raw.content || "",
+      content: typeof raw.delta?.text === 'string' ? raw.delta.text : (typeof raw.text === 'string' ? raw.text : (typeof raw.content === 'string' ? raw.content : "")),
     };
   }
 
@@ -65,7 +65,7 @@ function getMessageContent(msg: Message): { type: string; content: any } | null 
     if (update.sessionUpdate === "agent_message_chunk") {
       return {
         type: "agent_chunk",
-        content: update.content?.text || update.content || "",
+        content: typeof update.content?.text === 'string' ? update.content.text : (typeof update.content === 'string' ? update.content : ""),
       };
     }
 
@@ -98,7 +98,7 @@ function getMessageContent(msg: Message): { type: string; content: any } | null 
       if (textContent) {
         return {
           type: "agent_text",
-          content: textContent.content?.text || textContent.text || "",
+          content: typeof textContent.content?.text === 'string' ? textContent.content.text : (typeof textContent.text === 'string' ? textContent.text : ""),
         };
       }
     }
@@ -308,6 +308,46 @@ describe("getMessageContent", () => {
       };
       const result = getMessageContent(msg);
       expect(result).toEqual({ type: "agent_chunk", content: "direct content" });
+    });
+
+    it("should return empty string (not an object) when content.text is empty", () => {
+      const msg: Message = {
+        id: "msg-1",
+        threadId: "t-1",
+        timestamp: "2024-01-01T00:00:00Z",
+        raw: {
+          params: {
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "" },
+            },
+          },
+        },
+        type: "session/update",
+      };
+      const result = getMessageContent(msg);
+      expect(result).toEqual({ type: "agent_chunk", content: "" });
+      expect(typeof result!.content).toBe("string");
+    });
+
+    it("should return empty string when content is an object without text", () => {
+      const msg: Message = {
+        id: "msg-1",
+        threadId: "t-1",
+        timestamp: "2024-01-01T00:00:00Z",
+        raw: {
+          params: {
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text" },
+            },
+          },
+        },
+        type: "session/update",
+      };
+      const result = getMessageContent(msg);
+      expect(result).toEqual({ type: "agent_chunk", content: "" });
+      expect(typeof result!.content).toBe("string");
     });
   });
 

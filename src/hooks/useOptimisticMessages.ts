@@ -58,7 +58,11 @@ export function useOptimisticMessages(): UseOptimisticMessagesReturn {
   }, []);
 
   const appendMessage = useCallback((msg: Message) => {
-    if (confirmedIdsRef.current.has(msg.id)) return;
+    // If this message ID already exists, update it in place (streaming accumulation)
+    if (confirmedIdsRef.current.has(msg.id)) {
+      setConfirmed((prev) => prev.map((m) => (m.id === msg.id ? msg : m)));
+      return;
+    }
 
     // If this is a user message that matches an optimistic one, replace it
     if (msg.type === "user_message") {
