@@ -251,8 +251,28 @@ export default function MobileChatCanvas({
 
             // --- TOOL PENDING ---
             if (parsed.type === "tool_pending") {
-              const { title, kind, rawInput, toolCallId, status } = parsed.content;
+              const { title: initialTitle, kind, rawInput: initialRawInput, toolCallId, status } = parsed.content;
               const currentMsgIdx = messages.indexOf(msg);
+
+              // Pull enriched input/title from the first tool_call_update
+              const updateMsg = messages.slice(currentMsgIdx + 1).find(
+                (m) => {
+                  const update = m.raw?.params?.update;
+                  return (
+                    update?.toolCallId === toolCallId &&
+                    update?.sessionUpdate === "tool_call_update"
+                  );
+                }
+              );
+              const updateData = updateMsg?.raw?.params?.update;
+              const resolvedRawInput =
+                (updateData?.rawInput && Object.keys(updateData.rawInput).length > 0)
+                  ? updateData.rawInput
+                  : initialRawInput;
+              const resolvedTitle =
+                (updateData?.title && updateData.title !== initialTitle)
+                  ? updateData.title
+                  : initialTitle;
 
               const resultMsg = messages.slice(currentMsgIdx + 1).find((m) => {
                 const update = m.raw?.params?.update;
@@ -280,8 +300,9 @@ export default function MobileChatCanvas({
                 <ToolPendingBubble
                   key={msg.id}
                   toolCallId={toolCallId}
-                  title={title}
+                  title={resolvedTitle}
                   kind={kind}
+                  rawInput={resolvedRawInput}
                   status={status}
                   timestamp={msg.timestamp}
                   resultMsg={resultMsg}

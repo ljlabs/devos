@@ -659,6 +659,108 @@ describe("ChatCanvas", () => {
   });
 
   describe("Tool calls", () => {
+    it("should render real ACP tool sequence with type, input summary, and output", async () => {
+      const user = userEvent.setup();
+      // Real ACP messages: initial tool_call has empty rawInput, first tool_call_update has the real input
+      const messages: Message[] = [
+        {
+          id: "msg-1",
+          threadId: "t-1",
+          timestamp: "2026-07-03T04:32:41.521Z",
+          raw: {
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: {
+              sessionId: "95513f8d-4175-402b-847d-2ef0265ac649",
+              update: {
+                _meta: { claudeCode: { toolName: "Bash" } },
+                toolCallId: "toolu_445fec9317b912bc",
+                sessionUpdate: "tool_call",
+                rawInput: {},
+                status: "pending",
+                title: "Terminal",
+                kind: "execute",
+                content: [],
+              },
+            },
+          },
+          type: "session/update",
+        },
+        {
+          id: "msg-2",
+          threadId: "t-1",
+          timestamp: "2026-07-03T04:32:41.851Z",
+          raw: {
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: {
+              sessionId: "95513f8d-4175-402b-847d-2ef0265ac649",
+              update: {
+                _meta: { claudeCode: { toolName: "Bash" } },
+                toolCallId: "toolu_445fec9317b912bc",
+                sessionUpdate: "tool_call_update",
+                rawInput: {
+                  command: "ls /home/kyle/workspace/LekkerLoyal/functions/src/callable/ /home/kyle/workspace/LekkerLoyal/functions/src/scheduled/ 2>/dev/null",
+                  description: "List all callable and scheduled function source files",
+                },
+                title: "ls /home/kyle/workspace/LekkerLoyal/functions/src/callable/ /home/kyle/workspace/LekkerLoyal/functions/src/scheduled/ 2>/dev/null",
+                kind: "execute",
+                content: [
+                  {
+                    type: "content",
+                    content: {
+                      type: "text",
+                      text: "List all callable and scheduled function source files",
+                    },
+                  },
+                ],
+              },
+            },
+          },
+          type: "session/update",
+        },
+        {
+          id: "msg-3",
+          threadId: "t-1",
+          timestamp: "2026-07-03T04:32:41.900Z",
+          raw: {
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: {
+              sessionId: "95513f8d-4175-402b-847d-2ef0265ac649",
+              update: {
+                _meta: { claudeCode: { toolName: "Bash" } },
+                toolCallId: "toolu_445fec9317b912bc",
+                sessionUpdate: "tool_call_update",
+                status: "completed",
+                rawOutput: "/home/kyle/workspace/LekkerLoyal/functions/src/callable/:\naddStamp.ts\nadminConfigureProgram.ts",
+              },
+            },
+          },
+          type: "session/update",
+        },
+      ];
+
+      render(
+        <ChatCanvas {...baseProps} activeThread={sampleThread} messages={messages} />
+      );
+
+      // 1. Tool type is shown (kind "execute" → "EXECUTE")
+      expect(screen.getByText(/EXECUTE/)).toBeInTheDocument();
+
+      // 2. The real command from rawInput is displayed (not just the generic title)
+      expect(
+        screen.getByText(/ls \/home\/kyle\/workspace\/LekkerLoyal\/functions\/src\/callable\//)
+      ).toBeInTheDocument();
+
+      // 3. Expand to reveal the tool output
+      const expandBtn = screen.getByText(/Show output/);
+      await user.click(expandBtn);
+      expect(
+        screen.getByText(/addStamp\.ts/)
+      ).toBeInTheDocument();
+    });
+
     it("should render tool pending indicator", () => {
       const messages: Message[] = [
         {

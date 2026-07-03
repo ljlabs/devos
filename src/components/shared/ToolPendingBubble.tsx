@@ -10,10 +10,41 @@ import React from "react";
 import { Zap, Terminal, CheckCircle2, XCircle } from "lucide-react";
 import { Message } from "../../types";
 
+/**
+ * Derive a short, human-readable summary from rawInput.
+ * Tries common ACP tool input fields in priority order so the header
+ * shows e.g. "EXECUTE: ls /path" instead of just "EXECUTE: Terminal".
+ */
+function deriveInputSummary(rawInput: Record<string, any> | undefined): string | null {
+  if (!rawInput || typeof rawInput !== "object") return null;
+
+  const preferredFields = [
+    "command", "file_path", "file_path_or_url", "path",
+    "pattern", "query", "url", "content", "source", "target",
+    "new_source", "notebook_path",
+  ];
+
+  for (const field of preferredFields) {
+    const val = rawInput[field];
+    if (val != null && val !== "") return String(val);
+  }
+
+  // Fallback: first non-null, non-empty value
+  for (const key of Object.keys(rawInput)) {
+    const val = rawInput[key];
+    if (val == null || val === "") continue;
+    if (typeof val === "string") return val;
+    if (typeof val === "object") return JSON.stringify(val);
+  }
+
+  return null;
+}
+
 interface ToolPendingBubbleProps {
   toolCallId: string;
   title: string | undefined;
   kind: string | undefined;
+  rawInput: Record<string, any> | undefined;
   status: string | undefined;
   timestamp: string | number;
   resultMsg: Message | undefined;
@@ -30,6 +61,7 @@ export function ToolPendingBubble({
   toolCallId,
   title,
   kind,
+  rawInput,
   status,
   timestamp,
   resultMsg,
@@ -44,6 +76,8 @@ export function ToolPendingBubble({
   const hasResult = !!resultMsg;
   const isFailed = resultStatus === "failed";
   const isCompleted = resultStatus === "completed";
+
+  const inputSummary = deriveInputSummary(rawInput);
 
   const iconClass = compact ? "w-6 h-6" : "w-8 h-8";
   const iconSize = compact ? 12 : 16;
@@ -102,7 +136,7 @@ export function ToolPendingBubble({
                   isFailed ? "text-red-400" : "text-slate-400"
                 }`}
               >
-                {kind?.toUpperCase() || "TOOL"}: {title || "pending…"}
+                {kind?.toUpperCase() || "TOOL"}: {inputSummary || title || "pending…"}
               </span>
               {isFailed && (
                 <span className={`${textSizeClass} font-semibold px-2 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30 flex-shrink-0`}>

@@ -419,9 +419,31 @@ export default function ChatCanvas({
 
             // 4. Tool pending (showing what's about to execute)
             if (parsed.type === "tool_pending") {
-              const { title, kind, rawInput, toolCallId, status } = parsed.content;
+              const { title: initialTitle, kind, rawInput: initialRawInput, toolCallId, status } = parsed.content;
               const currentMsgIdx = messages.indexOf(msg);
-              
+
+              // The initial tool_call often arrives with rawInput: {} and a generic
+              // title. The first tool_call_update carries the real input and a
+              // descriptive title — pull from whichever has the richer data.
+              const updateMsg = messages.slice(currentMsgIdx + 1).find(
+                (m) => {
+                  const update = m.raw?.params?.update;
+                  return (
+                    update?.toolCallId === toolCallId &&
+                    update?.sessionUpdate === "tool_call_update"
+                  );
+                }
+              );
+              const updateData = updateMsg?.raw?.params?.update;
+              const resolvedRawInput =
+                (updateData?.rawInput && Object.keys(updateData.rawInput).length > 0)
+                  ? updateData.rawInput
+                  : initialRawInput;
+              const resolvedTitle =
+                (updateData?.title && updateData.title !== initialTitle)
+                  ? updateData.title
+                  : initialTitle;
+
               // Look ahead for matching tool result that has rawOutput (completed OR failed)
               const resultMsg = messages.slice(currentMsgIdx + 1).find(
                 (m) => {
@@ -453,8 +475,9 @@ export default function ChatCanvas({
                 <ToolPendingBubble
                   key={msg.id}
                   toolCallId={toolCallId}
-                  title={title}
+                  title={resolvedTitle}
                   kind={kind}
+                  rawInput={resolvedRawInput}
                   status={status}
                   timestamp={msg.timestamp}
                   resultMsg={resultMsg}
