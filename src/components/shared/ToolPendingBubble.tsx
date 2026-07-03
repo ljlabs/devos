@@ -19,8 +19,8 @@ function deriveInputSummary(rawInput: Record<string, any> | undefined): string |
   if (!rawInput || typeof rawInput !== "object") return null;
 
   const preferredFields = [
-    "command", "file_path", "file_path_or_url", "path",
-    "pattern", "query", "url", "content", "source", "target",
+    "command", "file_path", "file_path_or_url", "pattern",
+    "path", "query", "url", "content", "source", "target",
     "new_source", "notebook_path",
   ];
 

@@ -284,12 +284,27 @@ export default function MobileChatCanvas({
               });
               const resultStatus = resultMsg?.raw?.params?.update?.status;
 
-              const permissionMsg = messages.find(
-                (m, idx) => idx > currentMsgIdx && m.type === "permission_response"
-              );
-              const permissionApproved = permissionMsg && permissionMsg.raw?.selected?.optionId?.includes("allow");
-              const permissionRejected = permissionMsg && !permissionMsg.raw?.selected?.optionId?.includes("allow");
-              const hasApproval = permissionApproved || permissionRejected;
+              // Look ahead for a permission REQUEST that belongs to this tool,
+              // then find the RESPONSE to that specific request.
+              const permissionRequest = messages.find((m) => {
+                if (m.type !== "session/request_permission") return false;
+                return m.raw?.params?.toolCall?.toolCallId === toolCallId;
+              });
+              let permissionApproved: boolean | undefined;
+              let permissionRejected: boolean | undefined;
+              if (permissionRequest) {
+                const permReqIdx = messages.indexOf(permissionRequest);
+                const permissionResponse = messages.find(
+                  (m, idx) => idx > permReqIdx && m.type === "permission_response"
+                );
+                if (permissionResponse) {
+                  const optionId = permissionResponse.raw?.selected?.optionId ?? "";
+                  const rejectIds = new Set(["reject", "reject_once", "deny", "plan"]);
+                  permissionApproved = !rejectIds.has(optionId);
+                  permissionRejected = rejectIds.has(optionId);
+                }
+              }
+              const hasApproval = !!(permissionApproved || permissionRejected);
 
               const hasResult = !!resultMsg;
               const isExpanded = expandedToolId === toolCallId;
