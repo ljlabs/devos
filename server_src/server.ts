@@ -1672,6 +1672,14 @@ const wsHandlers: WsHandlers = {
       result: { outcome: { outcome: "selected", optionId } },
     });
 
+    const permResponseMsg: Message = {
+      id: newId("msg-perm"),
+      threadId,
+      timestamp: new Date().toISOString(),
+      type: "permission_response",
+      raw: { selected: { optionId } },
+    };
+
     updateDb((db) => {
       const t = db.threads.find((t) => t.id === threadId);
       if (t) {
@@ -1679,15 +1687,10 @@ const wsHandlers: WsHandlers = {
         t.pendingPermissionId = undefined;
         t.pendingPermissionOptions = undefined;
       }
-      db.messages.push({
-        id: newId("msg-perm"),
-        threadId,
-        timestamp: new Date().toISOString(),
-        type: "permission_response",
-        raw: { selected: { optionId } },
-      });
+      db.messages.push(permResponseMsg);
     });
 
+    broadcastToThread(threadId, permResponseMsg);
     const updatedThread = readDb().threads.find((t) => t.id === threadId);
     if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
   },
