@@ -15,7 +15,7 @@ interface UserMessageBubbleProps {
   pending?: boolean; // true when waiting for server acknowledgment
 }
 
-export function UserMessageBubble({
+export const UserMessageBubble = React.memo(function UserMessageBubble({
   content,
   timestamp,
   compact = false,
@@ -59,4 +59,4 @@ export function UserMessageBubble({
       </div>
     </div>
   );
-}
+});

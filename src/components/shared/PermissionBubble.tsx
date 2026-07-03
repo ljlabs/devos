@@ -7,7 +7,7 @@ import React, { useState } from "react";
 import { ShieldAlert } from "lucide-react";
 import { derivePatternVariants } from "../../utils/patterns";
 
-export function PermissionBubble({
+export const PermissionBubble = React.memo(function PermissionBubble({
   toolCall,
   options,
   onRespond,
@@ -170,4 +170,4 @@ export function PermissionBubble({
       </div>
     </div>
   );
-}
+});

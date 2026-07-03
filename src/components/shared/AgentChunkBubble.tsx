@@ -17,7 +17,7 @@ interface AgentChunkBubbleProps {
   compact?: boolean; // true for mobile, false for desktop
 }
 
-export function AgentChunkBubble({
+export const AgentChunkBubble = React.memo(function AgentChunkBubble({
   content,
   timestamp,
   compact = false,
@@ -73,4 +73,4 @@ export function AgentChunkBubble({
       </div>
     </div>
   );
-}
+});

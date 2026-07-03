@@ -17,7 +17,7 @@ interface AgentTextBubbleProps {
   compact?: boolean; // true for mobile, false for desktop
 }
 
-export function AgentTextBubble({
+export const AgentTextBubble = React.memo(function AgentTextBubble({
   content,
   timestamp,
   compact = false,
@@ -79,4 +79,4 @@ export function AgentTextBubble({
       </div>
     </div>
   );
-}
+});

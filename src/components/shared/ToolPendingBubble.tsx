@@ -57,7 +57,8 @@ interface ToolPendingBubbleProps {
   compact?: boolean; // true for mobile, false for desktop
 }
 
-export function ToolPendingBubble({
+// Custom comparison to handle function prop changes
+export const ToolPendingBubble = React.memo(function ToolPendingBubble({
   toolCallId,
   title,
   kind,
@@ -184,4 +185,21 @@ export function ToolPendingBubble({
       </div>
     </div>
   );
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison: only re-render if these specific props change
+  return (
+    prevProps.toolCallId === nextProps.toolCallId &&
+    prevProps.title === nextProps.title &&
+    prevProps.kind === nextProps.kind &&
+    prevProps.rawInput === nextProps.rawInput &&
+    prevProps.status === nextProps.status &&
+    prevProps.resultMsg === nextProps.resultMsg &&
+    prevProps.resultStatus === nextProps.resultStatus &&
+    prevProps.permissionApproved === nextProps.permissionApproved &&
+    prevProps.permissionRejected === nextProps.permissionRejected &&
+    prevProps.hasApproval === nextProps.hasApproval &&
+    prevProps.isExpanded === nextProps.isExpanded &&
+    prevProps.compact === nextProps.compact
+    // Intentionally skip onToggleExpand comparison - new function each render is OK
+  );
+});

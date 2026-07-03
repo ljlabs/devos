@@ -8,7 +8,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ThinkingBlock } from "./ThinkingBlock";
 
-export function MarkdownContent({ content }: { content: string }) {
+export const MarkdownContent = React.memo(function MarkdownContent({ content }: { content: string }) {
   const segments = content.split(/(<thought>[\s\S]*?<\/thought>)/g);
 
   return (
@@ -37,4 +37,4 @@ export function MarkdownContent({ content }: { content: string }) {
       })}
     </div>
   );
-}
+});

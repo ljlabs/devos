@@ -383,7 +383,7 @@ function FileTreeItem({
 
   return (
     <div>
-      {console.log(`[FileTreeItem] Rendering: ${entry.path}, hasInlineEdit: ${!!inlineEdit}`)}
+      {/* Debug: {console.log(`[FileTreeItem] Rendering: ${entry.path}, hasInlineEdit: ${!!inlineEdit}`)} */}
       <div
         className={`flex items-center gap-1.5 py-1 pr-2 cursor-pointer transition-colors group ${
           isActive
@@ -424,7 +424,7 @@ function FileTreeItem({
         {/* Name or inline edit */}
         {inlineEdit ? (
           <div className="flex-1 min-w-0">
-            {console.log(`[FileExplorer] Rendering inline edit on entry: ${entry.path}, mode: ${inlineEdit.mode}`)}
+            {/* Debug: {console.log(`[FileExplorer] Rendering inline edit on entry: ${entry.path}, mode: ${inlineEdit.mode}`)} */}
             <InlineEditInput
               initialValue={inlineEdit.initialValue}
               onSubmit={async (newValue) => {

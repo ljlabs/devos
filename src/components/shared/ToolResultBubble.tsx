@@ -17,7 +17,7 @@ interface ToolResultBubbleProps {
   compact?: boolean; // true for mobile, false for desktop
 }
 
-export function ToolResultBubble({
+export const ToolResultBubble = React.memo(function ToolResultBubble({
   title,
   kind,
   rawOutput,
@@ -75,4 +75,4 @@ export function ToolResultBubble({
       </div>
     </div>
   );
-}
+});

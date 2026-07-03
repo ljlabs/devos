@@ -11,7 +11,7 @@
  * - agent text responses (session/update with text content)
  */
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import {
   Terminal,
   Bot,
@@ -238,7 +238,7 @@ export default function ChatCanvas({
   }, [activeThread?.id]);
 
   // Auto-expand textarea as user types, cap at 10 lines (240px)
-  const handleTextareaChange = (text: string) => {
+  const handleTextareaChange = useCallback((text: string) => {
     onChangeInput(text);
 
     if (textareaRef.current) {
@@ -246,11 +246,16 @@ export default function ChatCanvas({
       const newHeight = Math.min(textareaRef.current.scrollHeight, 240);
       textareaRef.current.style.height = newHeight + "px";
     }
-  };
+  }, [onChangeInput]);
 
-  const handleKeyDown = (_e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = useCallback((_e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter inserts a newline; submission is via the send button only
-  };
+  }, []);
+
+  // Memoize tool expand handler to prevent unnecessary re-renders
+  const handleToggleExpand = useCallback((toolCallId: string) => {
+    setExpandedToolId(prev => prev === toolCallId ? null : toolCallId);
+  }, []);
 
   if (!activeThread) {
     return (
