@@ -16,6 +16,17 @@ export interface UseOptimisticMessagesReturn {
   clearOptimistic: () => void;
 }
 
+export interface PaginatedMessagesReturn extends UseOptimisticMessagesReturn {
+  /** Load more messages (older ones) */
+  loadMore: () => Promise<void>;
+  /** Whether more messages are available to load */
+  hasMore: boolean;
+  /** Whether a load is in progress */
+  isLoadingMore: boolean;
+  /** Total message count */
+  totalCount: number;
+}
+
 export function useOptimisticMessages(): UseOptimisticMessagesReturn {
   const [confirmed, setConfirmed] = useState<Message[]>([]);
   const [optimistic, setOptimistic] = useState<Map<string, Message>>(new Map());

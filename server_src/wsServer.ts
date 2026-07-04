@@ -107,15 +107,14 @@ function subscribeClient(ws: WebSocket, threadId: string, readDb: () => { messag
   }
   subscribers.add(ws);
 
-  // Send current state for the thread
+  // Send thread status only — initial messages are loaded via the paginated HTTP endpoint
   const db = readDb();
   const thread = db.threads.find((t) => t.id === threadId);
-  const messages = db.messages.filter((m) => m.threadId === threadId);
 
   sendJson(ws, {
     type: "subscribed",
     threadId,
-    messages,
+    messages: [],
     thread: thread ?? null,
   });
 

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Routes, Route, useParams, useNavigate, Navigate, useLocation, Outlet } from "react-router-dom";
 import { History } from "lucide-react";
 import WorkspaceSidebar from "./components/WorkspaceSidebar";
@@ -13,6 +13,7 @@ import { WorkspaceModal, SettingsModal } from "./components/Dialogs";
 import { Workspace, Thread, Message, FileEntry, FileContent } from "./types";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useOptimisticMessages } from "./hooks/useOptimisticMessages";
+import { usePaginatedMessages } from "./hooks/usePaginatedMessages";
 import IdeRoute from "./routes/IdeRoute";
 import LogsRoute from "./routes/LogsRoute";
 
@@ -200,6 +201,25 @@ function MessagesRoute() {
     messages, addOptimistic, confirmMessage, setConfirmed, appendMessage, clearOptimistic,
   } = useOptimisticMessages();
 
+  // Paginated message loading
+  const {
+    messages: paginatedMessages,
+    loadMore,
+    hasMore,
+    isLoadingMore,
+    totalCount,
+    isLoading: isLoadingMessages,
+  } = usePaginatedMessages(activeThreadId);
+
+  // Merge paginated messages with optimistic messages (optimistic ones take precedence)
+  const optimisticIds = new Set(messages.map(m => m.id));
+  const mergedMessages = useMemo(() => {
+    const paginated = paginatedMessages.filter(m => !optimisticIds.has(m.id));
+    return [...messages, ...paginated].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+  }, [messages, paginatedMessages]);
+
   const handleWsMessage = useCallback((msg: Message) => { appendMessage(msg); }, [appendMessage]);
   const handleWsThreadUpdate = useCallback((thread: Thread) => { setThreads((prev) => prev.map((t) => (t.id === thread.id ? thread : t))); }, []);
   const handleWsAck = useCallback((clientMsgId: string, message: Message) => { confirmMessage(clientMsgId, message); }, [confirmMessage]);
@@ -231,19 +251,7 @@ function MessagesRoute() {
     } catch (e) { console.error("API error fetching threads", e); }
   }, [threadId, navigate]);
 
-  const fetchMessages = useCallback(async (tid: string) => {
-    if (!tid) return;
-    try {
-      const res = await fetch(`/api/threads/${tid}/messages`);
-      if (res.ok) { setConfirmed(await res.json()); }
-    } catch (e) { console.error("API error fetching messages", e); }
-  }, [setConfirmed]);
-
   useEffect(() => { if (activeWorkspaceId) fetchThreads(activeWorkspaceId); }, [activeWorkspaceId, fetchThreads]);
-  useEffect(() => {
-    clearOptimistic();
-    if (activeThreadId) fetchMessages(activeThreadId); else setConfirmed([]);
-  }, [activeThreadId, fetchMessages, clearOptimistic, setConfirmed]);
 
   const activeThread = threads.find((t) => t.id === activeThreadId) || null;
 
@@ -294,7 +302,7 @@ function MessagesRoute() {
       <div className="flex-1 flex flex-col overflow-hidden">
         <ChatCanvas
           activeThread={activeThread}
-          messages={messages}
+          messages={mergedMessages}
           inputText={inputText}
           onChangeInput={setInputText}
           onSendMessage={handleSendMessage}
@@ -306,6 +314,10 @@ function MessagesRoute() {
           onClearThreadLogs={() => {}}
           workspacePath={undefined}
           onToggleMobileNav={() => setShowThreadListOnMobile(!showThreadListOnMobile)}
+          hasMore={hasMore}
+          isLoadingMore={isLoadingMore}
+          onLoadMore={loadMore}
+          totalCount={totalCount}
         />
       </div>
     </>

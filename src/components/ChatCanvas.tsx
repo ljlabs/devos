@@ -181,6 +181,11 @@ interface ChatCanvasProps {
   onClearThreadLogs: () => void;
   workspacePath?: string;
   onToggleMobileNav?: () => void;
+  // Pagination props
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
+  totalCount?: number;
 }
 
 
@@ -198,6 +203,10 @@ export default function ChatCanvas({
   onClearThreadLogs,
   workspacePath,
   onToggleMobileNav,
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
+  totalCount,
 }: ChatCanvasProps) {
   const [expandedToolId, setExpandedToolId] = useState<string | null>(null);
   const [showConsole, setShowConsole] = useState(false);
@@ -227,15 +236,51 @@ export default function ChatCanvas({
     }
   }, [messages]);
 
-  // Also scroll to bottom when thread changes (new chat window opened)
+  // Scroll to bottom when thread changes.
+  // Uses a MutationObserver to wait for the messages to actually render
+  // in the DOM before scrolling, since the paginated hook loads async.
+  const prevThreadIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (activeThread) {
-      const timeoutId = setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-      }, 0);
-      return () => clearTimeout(timeoutId);
-    }
+    const threadId = activeThread?.id ?? null;
+    if (threadId === prevThreadIdRef.current) return;
+    prevThreadIdRef.current = threadId;
+
+    if (!threadId || !scrollContainerRef.current) return;
+
+    // Scroll immediately for empty/loading state
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+
+    // Also scroll once messages finish rendering (paginated hook loads async)
+    const el = scrollContainerRef.current;
+    const observer = new MutationObserver(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    });
+    observer.observe(el, { childList: true, subtree: true });
+
+    // Cleanup after a short delay — messages should be rendered by then
+    const timeoutId = setTimeout(() => observer.disconnect(), 500);
+    return () => { observer.disconnect(); clearTimeout(timeoutId); };
   }, [activeThread?.id]);
+
+  // Handle scroll for pagination - load more when near top
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el || !onLoadMore || !hasMore || isLoadingMore) return;
+    
+    // If we're near the top (within 100px) and there's more to load
+    if (el.scrollTop < 100) {
+      onLoadMore();
+    }
+  }, [onLoadMore, hasMore, isLoadingMore]);
+
+  // Add scroll listener
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    
+    el.addEventListener('scroll', handleScroll);
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, [handleScroll]);
 
   // Auto-expand textarea as user types, cap at 10 lines (240px)
   const handleTextareaChange = useCallback((text: string) => {
@@ -376,7 +421,23 @@ export default function ChatCanvas({
             </p>
           </div>
         ) : (
-          messages.map((msg) => {
+          <>
+            {/* Load more trigger / loading indicator */}
+            {hasMore && (
+              <div className="flex justify-center py-2">
+                {isLoadingMore ? (
+                  <span className="text-xs text-slate-500 animate-pulse">Loading older messages...</span>
+                ) : (
+                  <button
+                    onClick={onLoadMore}
+                    className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
+                  >
+                    Load older messages ({totalCount} total)
+                  </button>
+                )}
+              </div>
+            )}
+            {messages.map((msg) => {
             const parsed = getMessageContent(msg);
             if (!parsed) return null;
 
@@ -514,8 +575,14 @@ export default function ChatCanvas({
             // 5. Tool result (execution complete) - skip if grouped with pending
             // These are now shown inside the collapsed tool bubble, so we skip them here
             if (parsed.type === "tool_result") {
-              const { toolCallId } = parsed.content;
-              
+              const { toolCallId, status, rawOutput } = parsed.content;
+
+              // Skip intermediate tool_call_update messages that have no status or output
+              // (these are just rawInput enrichment updates, not final results)
+              if (!rawOutput && !status) {
+                return null;
+              }
+
               // Check if there's a pending tool call before this result
               const currentMsgIdx = messages.indexOf(msg);
               const hasPendingBefore = messages.slice(0, currentMsgIdx).some(
@@ -527,14 +594,14 @@ export default function ChatCanvas({
                   );
                 }
               );
-              
+
               // If there's a pending call before this result, hide the result (it's shown in the expanded pending bubble)
               if (hasPendingBefore) {
                 return null;
               }
-              
+
               // Orphaned result (no pending call before it) - render it standalone
-              const { status, title, kind, rawOutput } = parsed.content;
+              const { title, kind } = parsed.content;
               
               return (
                 <ToolResultBubble
@@ -641,7 +708,8 @@ export default function ChatCanvas({
             }
 
               return null;
-            })
+            })}
+          </>
         )}
 
         {/* Anchor point to trigger scroll */}

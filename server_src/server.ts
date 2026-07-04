@@ -916,6 +916,26 @@ app.get("/api/threads/:threadId/messages", (req, res) => {
 });
 
 /**
+ * GET /api/threads/:threadId/messages/paginated
+ * Query params: limit (default 10, max 200)
+ * Returns the latest `limit` messages, newest first.
+ * hasMore is true when there are older messages beyond the window.
+ */
+app.get("/api/threads/:threadId/messages/paginated", (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit as string) || 10, 200);
+  const db = readDb();
+  const all = db.messages
+    .filter((m) => m.threadId === req.params.threadId)
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  const messages = all.slice(0, limit);
+  res.json({
+    messages,
+    hasMore: all.length > limit,
+    total: all.length,
+  });
+});
+
+/**
  * POST /api/threads/:threadId/messages
  * Body: { text: string }
  *

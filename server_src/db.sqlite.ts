@@ -218,6 +218,37 @@ export class SqliteDb {
   }
 
   /**
+   * Get paginated messages for a thread (newest first)
+   */
+  getMessages(threadId: string, offset: number, limit: number): Message[] {
+    try {
+      const rows = this.db.prepare(
+        "SELECT * FROM messages WHERE threadId = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+      ).all(threadId, limit, offset) as any[];
+      return rows.map((row) => ({
+        ...row,
+        raw: JSON.parse(row.raw),
+      })) as Message[];
+    } catch (err: any) {
+      console.error("[db] getMessages failed:", err.message);
+      return [];
+    }
+  }
+
+  /**
+   * Get total message count for a thread
+   */
+  getMessageCount(threadId: string): number {
+    try {
+      const row = this.db.prepare("SELECT COUNT(*) as count FROM messages WHERE threadId = ?").get(threadId) as { count: number };
+      return row?.count ?? 0;
+    } catch (err: any) {
+      console.error("[db] getMessageCount failed:", err.message);
+      return 0;
+    }
+  }
+
+  /**
    * Close the database connection
    */
   close(): void {

@@ -45,6 +45,11 @@ function setupFetchMock() {
     if (path === "/api/workspaces") return jsonResponse(mockWorkspaces);
     const threadMatch = path.match(/\/api\/workspaces\/([^/]+)\/threads/);
     if (threadMatch) return jsonResponse(mockThreads[threadMatch[1]] ?? []);
+    const paginatedMatch = path.match(/\/api\/threads\/([^/]+)\/messages\/paginated/);
+    if (paginatedMatch) {
+      const msgs = mockMessages[paginatedMatch[1]] ?? [];
+      return jsonResponse({ messages: msgs, hasMore: false, total: msgs.length });
+    }
     const msgMatch = path.match(/\/api\/threads\/([^/]+)\/messages/);
     if (msgMatch) return jsonResponse(mockMessages[msgMatch[1]] ?? []);
     return jsonResponse([]);
@@ -120,7 +125,9 @@ describe("App routing", () => {
 
       // Should load messages for th-1 (first thread)
       await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith("/api/threads/th-1/messages");
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining("/api/threads/th-1/messages/paginated"),
+        );
       });
     });
 
@@ -147,7 +154,9 @@ describe("App routing", () => {
 
       // Should load messages for th-2, NOT th-1
       await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith("/api/threads/th-2/messages");
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining("/api/threads/th-2/messages/paginated"),
+        );
       });
     });
 
@@ -159,7 +168,9 @@ describe("App routing", () => {
       });
 
       await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith("/api/threads/th-3/messages");
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining("/api/threads/th-3/messages/paginated"),
+        );
       });
     });
 
@@ -167,7 +178,9 @@ describe("App routing", () => {
       const { unmount } = renderAt("/messages/ws-1/th-2");
 
       await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith("/api/threads/th-2/messages");
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining("/api/threads/th-2/messages/paginated"),
+        );
       });
 
       unmount();
@@ -177,14 +190,19 @@ describe("App routing", () => {
       renderAt("/messages/ws-1/th-2");
 
       await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith("/api/threads/th-2/messages");
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining("/api/threads/th-2/messages/paginated"),
+        );
       });
 
       // Verify the only messages fetched were for th-2, not th-1
       const messageCalls = (mockFetch as Mock).mock.calls.filter(
         (c: unknown[]) => typeof c[0] === "string" && c[0].includes("/api/threads/"),
       );
-      expect(messageCalls.every((c: unknown[]) => (c as unknown[])[0] === "/api/threads/th-2/messages")).toBe(true);
+      expect(messageCalls.every((c: unknown[]) => {
+        const url = (c as unknown[])[0] as string;
+        return url.includes("/api/threads/th-2/messages");
+      })).toBe(true);
     });
   });
 
@@ -220,7 +238,9 @@ describe("App routing", () => {
       await user.click(threadTwoButton);
 
       await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith("/api/threads/th-2/messages");
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining("/api/threads/th-2/messages/paginated"),
+        );
       });
     });
   });
@@ -284,6 +304,11 @@ describe("App routing", () => {
         if (path === "/api/workspaces") return jsonResponse(mockWorkspaces);
         const threadMatch = path.match(/\/api\/workspaces\/([^/]+)\/threads/);
         if (threadMatch) return jsonResponse(mockThreads[threadMatch[1]] ?? []);
+        const paginatedMatch = path.match(/\/api\/threads\/([^/]+)\/messages\/paginated/);
+        if (paginatedMatch) {
+          const msgs = mockMessages[paginatedMatch[1]] ?? [];
+          return jsonResponse({ messages: msgs, hasMore: false, total: msgs.length });
+        }
         const msgMatch = path.match(/\/api\/threads\/([^/]+)\/messages/);
         if (msgMatch) return jsonResponse(mockMessages[msgMatch[1]] ?? []);
         return jsonResponse([]);
@@ -292,7 +317,9 @@ describe("App routing", () => {
       renderAt("/messages/ws-1/th-1");
 
       await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith("/api/threads/th-1/messages");
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining("/api/threads/th-1/messages/paginated"),
+        );
       });
 
       // Find the delete button for Thread One
@@ -313,7 +340,9 @@ describe("App routing", () => {
       renderAt("/messages/ws-1/th-1");
 
       await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalledWith("/api/threads/th-1/messages");
+        expect(mockFetch).toHaveBeenCalledWith(
+          expect.stringContaining("/api/threads/th-1/messages/paginated"),
+        );
       });
 
       // Verify the workspace name appears in the sidebar
