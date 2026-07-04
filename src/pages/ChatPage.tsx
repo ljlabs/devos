@@ -6,7 +6,7 @@
  * Chat view for a thread with bottom nav to switch to IDE panels.
  */
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import MobileChatCanvas from "../components/MobileChatCanvas";
 import MobileBottomNav from "../components/MobileBottomNav";
@@ -14,6 +14,7 @@ import MobileIdeView from "../components/MobileIdeView";
 import { IdePanel, Thread, Message } from "../types";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useOptimisticMessages } from "../hooks/useOptimisticMessages";
+import { usePaginatedMessages } from "../hooks/usePaginatedMessages";
 
 export default function ChatPage() {
   const { workspaceId, threadId } = useParams<{ workspaceId: string; threadId: string }>();
@@ -28,7 +29,7 @@ export default function ChatPage() {
   const threadSseRef = useRef<EventSource | null>(null);
 
   const {
-    messages,
+    messages: optimisticMessages,
     addOptimistic,
     confirmMessage,
     setConfirmed,
@@ -36,10 +37,31 @@ export default function ChatPage() {
     clearOptimistic,
   } = useOptimisticMessages();
 
+  // Paginated message loading (same expanding-window model as desktop)
+  const {
+    messages: paginatedMessages,
+    loadMore,
+    hasMore,
+    isLoadingMore,
+    totalCount,
+  } = usePaginatedMessages(threadId || null);
+
+  // Merge paginated + optimistic (optimistic takes precedence)
+  const optimisticIds = new Set(optimisticMessages.map(m => m.id));
+  const messages = useMemo(() => {
+    const paginated = paginatedMessages.filter(m => !optimisticIds.has(m.id));
+    return [...optimisticMessages, ...paginated].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+  }, [optimisticMessages, paginatedMessages]);
+
   const handleWsMessage = useCallback((msg: Message) => appendMessage(msg), [appendMessage]);
   const handleWsThreadUpdate = useCallback((t: Thread) => setThread(prev => prev?.id === t.id ? t : prev), []);
   const handleWsAck = useCallback((clientMsgId: string, message: Message) => confirmMessage(clientMsgId, message), [confirmMessage]);
-  const handleWsSubscribed = useCallback((_tid: string, msgs: Message[]) => setConfirmed(msgs), [setConfirmed]);
+  const handleWsSubscribed = useCallback((_tid: string, _msgs: Message[]) => {
+    // Initial messages are loaded via the paginated HTTP endpoint;
+    // WS only delivers real-time updates (appendMessage). Don't wipe state here.
+  }, []);
 
   const { sendMessage: wsSendMessage, respondToPermission: wsRespond, cancelAgent: wsCancel } = useWebSocket({
     threadId: threadId || null,
@@ -50,14 +72,9 @@ export default function ChatPage() {
     onConnectionChange: () => {},
   });
 
-  // Load thread + workspace path
+  // Load workspace path + thread info (messages are loaded by usePaginatedMessages)
   useEffect(() => {
     if (!threadId || !workspaceId) return;
-
-    fetch(`/api/threads/${threadId}/messages`)
-      .then(r => r.ok ? r.json() : [])
-      .then(setConfirmed)
-      .catch(console.error);
 
     fetch(`/api/workspaces/${workspaceId}`)
       .then(r => r.ok ? r.json() : null)
@@ -72,7 +89,12 @@ export default function ChatPage() {
         if (t) setThread(t);
       })
       .catch(console.error);
-  }, [threadId, workspaceId, setConfirmed]);
+  }, [threadId, workspaceId]);
+
+  // Clear optimistic messages when thread changes
+  useEffect(() => {
+    clearOptimistic();
+  }, [threadId, clearOptimistic]);
 
   // SSE: Thread logs
   useEffect(() => {
@@ -126,6 +148,10 @@ export default function ChatPage() {
             isDeploying={isDeploying}
             threadLogs={threadLogs}
             workspacePath={workspacePath}
+            hasMore={hasMore}
+            isLoadingMore={isLoadingMore}
+            onLoadMore={loadMore}
+            totalCount={totalCount}
             onBack={() => navigate(`/messages/${workspaceId}`)}
           />
         )}

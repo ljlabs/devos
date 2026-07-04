@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { History } from "lucide-react";
 import MobileWorkspaceSidebar from "./MobileWorkspaceSidebar";
@@ -15,6 +15,7 @@ import { WorkspaceModal, SettingsModal } from "./Dialogs";
 import { Workspace, Thread, Message, IdePanel } from "../types";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useOptimisticMessages } from "../hooks/useOptimisticMessages";
+import { usePaginatedMessages } from "../hooks/usePaginatedMessages";
 
 /**
  * Mobile-specific App layout
@@ -56,13 +57,31 @@ export default function MobileApp({ initialWorkspaceId, initialThreadId }: { ini
 
   // Optimistic messages hook
   const {
-    messages,
+    messages: optimisticMessages,
     addOptimistic,
     confirmMessage,
     setConfirmed,
     appendMessage,
     clearOptimistic,
   } = useOptimisticMessages();
+
+  // Paginated message loading (same expanding-window model as desktop)
+  const {
+    messages: paginatedMessages,
+    loadMore,
+    hasMore,
+    isLoadingMore,
+    totalCount,
+  } = usePaginatedMessages(activeThreadId);
+
+  // Merge paginated + optimistic (optimistic takes precedence)
+  const optimisticIds = new Set(optimisticMessages.map(m => m.id));
+  const messages = useMemo(() => {
+    const paginated = paginatedMessages.filter(m => !optimisticIds.has(m.id));
+    return [...optimisticMessages, ...paginated].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+  }, [optimisticMessages, paginatedMessages]);
 
   // WebSocket event handlers
   const handleWsMessage = useCallback((msg: Message) => {
@@ -77,9 +96,10 @@ export default function MobileApp({ initialWorkspaceId, initialThreadId }: { ini
     confirmMessage(clientMsgId, message);
   }, [confirmMessage]);
 
-  const handleWsSubscribed = useCallback(async (_threadId: string, msgs: Message[], _thread: Thread | null) => {
-    setConfirmed(msgs);
-  }, [setConfirmed]);
+  const handleWsSubscribed = useCallback(async (_threadId: string, _msgs: Message[], _thread: Thread | null) => {
+    // Initial messages are loaded via the paginated HTTP endpoint;
+    // WS only delivers real-time updates (appendMessage). Don't wipe state here.
+  }, []);
 
   const handleWsConnectionChange = useCallback((connected: boolean) => {
     setWsConnected(connected);
@@ -134,19 +154,6 @@ export default function MobileApp({ initialWorkspaceId, initialThreadId }: { ini
       console.error("API error fetching threads", e);
     }
   }, [activeThreadId, clearOptimistic, setConfirmed]);
-
-  const fetchMessages = useCallback(async (threadId: string) => {
-    if (!threadId) return;
-    try {
-      const res = await fetch(`/api/threads/${threadId}/messages`);
-      if (res.ok) {
-        const data = await res.json();
-        setConfirmed(data);
-      }
-    } catch (e) {
-      console.error("API error fetching messages", e);
-    }
-  }, [setConfirmed]);
 
   // Initialize
   useEffect(() => {
@@ -215,15 +222,12 @@ export default function MobileApp({ initialWorkspaceId, initialThreadId }: { ini
     }
   }, [activeWorkspaceId, fetchThreads]);
 
-  // Update messages when thread changes
+  // Clear optimistic messages when thread changes
+  // (paginated messages are handled by usePaginatedMessages)
   useEffect(() => {
     clearOptimistic();
-    if (activeThreadId) {
-      fetchMessages(activeThreadId);
-    } else {
-      setConfirmed([]);
-    }
-  }, [activeThreadId, fetchMessages, clearOptimistic, setConfirmed]);
+    if (!activeThreadId) setConfirmed([]);
+  }, [activeThreadId, clearOptimistic, setConfirmed]);
 
   const activeThread = threads.find(t => t.id === activeThreadId) || null;
   const activeThreadLogs = activeThreadId ? (threadLogs[activeThreadId] || []) : [];
@@ -466,6 +470,10 @@ export default function MobileApp({ initialWorkspaceId, initialThreadId }: { ini
               isDeploying={isDeploying}
               threadLogs={activeThreadLogs}
               workspacePath={workspaces.find(w => w.id === activeWorkspaceId)?.path}
+              hasMore={hasMore}
+              isLoadingMore={isLoadingMore}
+              onLoadMore={loadMore}
+              totalCount={totalCount}
               onBack={() => { setCurrentView('threads'); navigate(`/messages/${activeWorkspaceId}`); }}
             />
           )}

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { ArrowLeft, Send, Square, Bot, Terminal, CheckCircle2, XCircle, Zap } from "lucide-react";
 import { Thread, Message } from "../types";
 import CopyButton from "./CopyButton";
@@ -30,13 +30,12 @@ interface MobileChatCanvasProps {
   threadLogs: any[];
   workspacePath?: string;
   onBack: () => void;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
+  totalCount?: number;
 }
 
-/**
- * Mobile-optimized chat canvas.
- * Uses the exact same getMessageContent() parser as desktop ChatCanvas to
- * ensure identical message rendering. Only layout/sizing differs.
- */
 export default function MobileChatCanvas({
   activeThread,
   messages,
@@ -50,6 +49,10 @@ export default function MobileChatCanvas({
   threadLogs,
   workspacePath,
   onBack,
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
+  totalCount,
 }: MobileChatCanvasProps) {
   const [expandedToolId, setExpandedToolId] = useState<string | null>(null);
   const [showConsole, setShowConsole] = useState(false);
@@ -73,21 +76,16 @@ export default function MobileChatCanvas({
 
     const updateScrollHeight = () => {
       const vh = window.visualViewport.height;
-      const headerHeight = 56; // h-14 = 56px
-      const inputHeight = 80; // Input area ~80px (textarea + padding)
-      const extraBuffer = 20; // Extra clearance for virtual keyboard and nav
-      
-      // Available height = viewport - header - input - extra buffer
+      const headerHeight = 56;
+      const inputHeight = 80;
+      const extraBuffer = 20;
       const availableHeight = vh - headerHeight - inputHeight - extraBuffer;
-      const maxHeight = Math.max(availableHeight, 150); // Minimum 150px
-      
+      const maxHeight = Math.max(availableHeight, 150);
       scrollContainer.style.maxHeight = `${maxHeight}px`;
     };
 
-    // Listen to keyboard open/close
     window.visualViewport.addEventListener("resize", updateScrollHeight);
     window.visualViewport.addEventListener("scroll", updateScrollHeight);
-    
     updateScrollHeight();
 
     return () => {
@@ -99,7 +97,6 @@ export default function MobileChatCanvas({
   // Scroll to bottom on new messages
   useEffect(() => {
     if (isNearBottom()) {
-      // Use a small delay to ensure DOM has updated
       const timeoutId = setTimeout(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
       }, 0);
@@ -107,15 +104,35 @@ export default function MobileChatCanvas({
     }
   }, [messages]);
 
-  // Also scroll to bottom when thread changes (new chat window opened)
+  // Scroll to bottom when thread changes — MutationObserver waits for async load
+  const prevThreadIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (activeThread) {
-      const timeoutId = setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-      }, 0);
-      return () => clearTimeout(timeoutId);
-    }
+    const threadId = activeThread?.id ?? null;
+    if (threadId === prevThreadIdRef.current) return;
+    prevThreadIdRef.current = threadId;
+
+    if (!threadId || !scrollContainerRef.current) return;
+
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+
+    const el = scrollContainerRef.current;
+    const observer = new MutationObserver(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    });
+    observer.observe(el, { childList: true, subtree: true });
+
+    const timeoutId = setTimeout(() => observer.disconnect(), 500);
+    return () => { observer.disconnect(); clearTimeout(timeoutId); };
   }, [activeThread?.id]);
+
+  // Load more older messages when scrolling near the top
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el || !onLoadMore || !hasMore || isLoadingMore) return;
+    if (el.scrollTop < 100) {
+      onLoadMore();
+    }
+  }, [onLoadMore, hasMore, isLoadingMore]);
 
   const handleTextareaChange = (text: string) => {
     onChangeInput(text);
@@ -147,7 +164,6 @@ export default function MobileChatCanvas({
         >
           <ArrowLeft size={18} />
         </button>
-
         <div className="flex-1 min-w-0">
           <h1 className="font-semibold text-white truncate text-sm">{activeThread.title}</h1>
           <div className="text-[10px] text-emerald-500 font-mono uppercase">
@@ -157,7 +173,6 @@ export default function MobileChatCanvas({
             {activeThread.status === 'idle' && '● Ready'}
           </div>
         </div>
-
         <button
           onClick={() => setShowConsole(!showConsole)}
           className={`p-2 rounded-lg text-xs transition-colors flex-shrink-0 ${
@@ -178,7 +193,7 @@ export default function MobileChatCanvas({
           {threadLogs.length === 0 ? (
             <p className="text-slate-600 italic">No logs yet</p>
           ) : (
-            threadLogs.map((log, i) => (
+            threadLogs.map((log: any, i: number) => (
               <p key={i} className="leading-relaxed">
                 <span className="text-emerald-500">▶</span> [{log.component}] {log.message}
               </p>
@@ -190,6 +205,7 @@ export default function MobileChatCanvas({
       {/* Messages scroll area */}
       <div
         ref={scrollContainerRef}
+        onScroll={handleScroll}
         className="flex-1 overflow-y-auto p-3 space-y-4 min-h-0"
         style={{ overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch', maxHeight: '100%' }}
       >
@@ -201,192 +217,185 @@ export default function MobileChatCanvas({
             </div>
           </div>
         ) : (
-          messages.map((msg) => {
-            const parsed = getMessageContent(msg);
-            if (!parsed) return null;
+          <>
+            {hasMore && (
+              <div className="flex justify-center py-2">
+                {isLoadingMore ? (
+                  <span className="text-xs text-slate-500 animate-pulse">Loading older messages...</span>
+                ) : (
+                  <button
+                    onClick={onLoadMore}
+                    className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
+                  >
+                    Load older messages ({totalCount} total)
+                  </button>
+                )}
+              </div>
+            )}
+            {messages.map((msg) => {
+              const parsed = getMessageContent(msg);
+              if (!parsed) return null;
 
-            // --- USER MESSAGE ---
-            if (parsed.type === "user") {
-              return (
-                <UserMessageBubble
-                  key={msg.id}
-                  content={parsed.content}
-                  timestamp={msg.timestamp}
-                  compact={true}
-                  pending={msg.pending}
-                />
-              );
-            }
+              if (parsed.type === "user") {
+                return (
+                  <UserMessageBubble
+                    key={msg.id}
+                    content={parsed.content}
+                    timestamp={msg.timestamp}
+                    compact={true}
+                    pending={msg.pending}
+                  />
+                );
+              }
 
-            // --- AGENT TEXT (full response) ---
-            if (parsed.type === "agent_text") {
-              const textContent = Array.isArray(parsed.content)
-                ? parsed.content.find((c: any) => c.type === "text")?.text || ""
-                : parsed.content;
-              if (!textContent) return null;
+              if (parsed.type === "agent_text") {
+                const textContent = Array.isArray(parsed.content)
+                  ? parsed.content.find((c: any) => c.type === "text")?.text || ""
+                  : parsed.content;
+                if (!textContent) return null;
+                return (
+                  <AgentTextBubble
+                    key={msg.id}
+                    content={textContent}
+                    timestamp={msg.timestamp}
+                    compact={true}
+                  />
+                );
+              }
 
-              return (
-                <AgentTextBubble
-                  key={msg.id}
-                  content={textContent}
-                  timestamp={msg.timestamp}
-                  compact={true}
-                />
-              );
-            }
+              if (parsed.type === "agent_chunk") {
+                if (!parsed.content) return null;
+                return (
+                  <AgentChunkBubble
+                    key={msg.id}
+                    content={parsed.content}
+                    timestamp={msg.timestamp}
+                    compact={true}
+                  />
+                );
+              }
 
-            // --- AGENT CHUNK (streaming) ---
-            if (parsed.type === "agent_chunk") {
-              if (!parsed.content) return null;
+              if (parsed.type === "tool_pending") {
+                const { title: initialTitle, kind, rawInput: initialRawInput, toolCallId, status } = parsed.content;
+                const currentMsgIdx = messages.indexOf(msg);
 
-              return (
-                <AgentChunkBubble
-                  key={msg.id}
-                  content={parsed.content}
-                  timestamp={msg.timestamp}
-                  compact={true}
-                />
-              );
-            }
+                const updateMsg = messages.slice(currentMsgIdx + 1).find((m) => {
+                  const update = m.raw?.params?.update;
+                  return update?.toolCallId === toolCallId && update?.sessionUpdate === "tool_call_update";
+                });
+                const updateData = updateMsg?.raw?.params?.update;
+                const resolvedRawInput =
+                  (updateData?.rawInput && Object.keys(updateData.rawInput).length > 0)
+                    ? updateData.rawInput
+                    : initialRawInput;
+                const resolvedTitle =
+                  (updateData?.title && updateData.title !== initialTitle)
+                    ? updateData.title
+                    : initialTitle;
 
-            // --- TOOL PENDING ---
-            if (parsed.type === "tool_pending") {
-              const { title: initialTitle, kind, rawInput: initialRawInput, toolCallId, status } = parsed.content;
-              const currentMsgIdx = messages.indexOf(msg);
-
-              // Pull enriched input/title from the first tool_call_update
-              const updateMsg = messages.slice(currentMsgIdx + 1).find(
-                (m) => {
+                const resultMsg = messages.slice(currentMsgIdx + 1).find((m) => {
                   const update = m.raw?.params?.update;
                   return (
                     update?.toolCallId === toolCallId &&
-                    update?.sessionUpdate === "tool_call_update"
+                    update?.sessionUpdate === "tool_call_update" &&
+                    (update?.status === "completed" || update?.status === "failed")
                   );
-                }
-              );
-              const updateData = updateMsg?.raw?.params?.update;
-              const resolvedRawInput =
-                (updateData?.rawInput && Object.keys(updateData.rawInput).length > 0)
-                  ? updateData.rawInput
-                  : initialRawInput;
-              const resolvedTitle =
-                (updateData?.title && updateData.title !== initialTitle)
-                  ? updateData.title
-                  : initialTitle;
+                });
+                const resultStatus = resultMsg?.raw?.params?.update?.status;
 
-              const resultMsg = messages.slice(currentMsgIdx + 1).find((m) => {
-                const update = m.raw?.params?.update;
+                const permissionRequest = messages.find((m) => {
+                  if (m.type !== "session/request_permission") return false;
+                  return m.raw?.params?.toolCall?.toolCallId === toolCallId;
+                });
+                let permissionApproved: boolean | undefined;
+                let permissionRejected: boolean | undefined;
+                if (permissionRequest) {
+                  const permReqIdx = messages.indexOf(permissionRequest);
+                  const permissionResponse = messages.find(
+                    (m, idx) => idx > permReqIdx && m.type === "permission_response"
+                  );
+                  if (permissionResponse) {
+                    const optionId = permissionResponse.raw?.selected?.optionId ?? "";
+                    const rejectIds = new Set(["reject", "reject_once", "deny", "plan"]);
+                    permissionApproved = !rejectIds.has(optionId);
+                    permissionRejected = rejectIds.has(optionId);
+                  }
+                }
+                const hasApproval = !!(permissionApproved || permissionRejected);
+                const isExpanded = expandedToolId === toolCallId;
+
                 return (
-                  update?.toolCallId === toolCallId &&
-                  update?.sessionUpdate === "tool_call_update" &&
-                  (update?.status === "completed" || update?.status === "failed")
+                  <ToolPendingBubble
+                    key={msg.id}
+                    toolCallId={toolCallId}
+                    title={resolvedTitle}
+                    kind={kind}
+                    rawInput={resolvedRawInput}
+                    status={status}
+                    timestamp={msg.timestamp}
+                    resultMsg={resultMsg}
+                    resultStatus={resultStatus}
+                    permissionApproved={permissionApproved}
+                    permissionRejected={permissionRejected}
+                    hasApproval={hasApproval}
+                    isExpanded={isExpanded}
+                    onToggleExpand={(id) => setExpandedToolId(expandedToolId === id ? null : id)}
+                    compact={true}
+                  />
                 );
-              });
-              const resultStatus = resultMsg?.raw?.params?.update?.status;
-
-              // Look ahead for a permission REQUEST that belongs to this tool,
-              // then find the RESPONSE to that specific request.
-              const permissionRequest = messages.find((m) => {
-                if (m.type !== "session/request_permission") return false;
-                return m.raw?.params?.toolCall?.toolCallId === toolCallId;
-              });
-              let permissionApproved: boolean | undefined;
-              let permissionRejected: boolean | undefined;
-              if (permissionRequest) {
-                const permReqIdx = messages.indexOf(permissionRequest);
-                const permissionResponse = messages.find(
-                  (m, idx) => idx > permReqIdx && m.type === "permission_response"
-                );
-                if (permissionResponse) {
-                  const optionId = permissionResponse.raw?.selected?.optionId ?? "";
-                  const rejectIds = new Set(["reject", "reject_once", "deny", "plan"]);
-                  permissionApproved = !rejectIds.has(optionId);
-                  permissionRejected = rejectIds.has(optionId);
-                }
               }
-              const hasApproval = !!(permissionApproved || permissionRejected);
 
-              const hasResult = !!resultMsg;
-              const isExpanded = expandedToolId === toolCallId;
-              const isFailed = resultStatus === "failed";
-              const isCompleted = resultStatus === "completed";
+              if (parsed.type === "tool_result") {
+                const { toolCallId } = parsed.content;
+                const currentMsgIdx = messages.indexOf(msg);
+                const hasPendingBefore = messages.slice(0, currentMsgIdx).some((m) => {
+                  const update = m.raw?.params?.update;
+                  return update?.toolCallId === toolCallId && update?.sessionUpdate === "tool_call";
+                });
+                if (hasPendingBefore) return null;
 
-              return (
-                <ToolPendingBubble
-                  key={msg.id}
-                  toolCallId={toolCallId}
-                  title={resolvedTitle}
-                  kind={kind}
-                  rawInput={resolvedRawInput}
-                  status={status}
-                  timestamp={msg.timestamp}
-                  resultMsg={resultMsg}
-                  resultStatus={resultStatus}
-                  permissionApproved={permissionApproved}
-                  permissionRejected={permissionRejected}
-                  hasApproval={hasApproval}
-                  isExpanded={isExpanded}
-                  onToggleExpand={(id) => setExpandedToolId(expandedToolId === id ? null : id)}
-                  compact={true}
-                />
-              );
-            }
+                const { kind, rawOutput } = parsed.content;
+                return (
+                  <ToolResultBubble
+                    key={msg.id}
+                    title={undefined}
+                    kind={kind}
+                    rawOutput={rawOutput}
+                    timestamp={msg.timestamp}
+                    compact={true}
+                  />
+                );
+              }
 
-            // --- TOOL RESULT (skip if paired with a pending bubble) ---
-            if (parsed.type === "tool_result") {
-              const { toolCallId } = parsed.content;
-              const currentMsgIdx = messages.indexOf(msg);
-              const hasPendingBefore = messages.slice(0, currentMsgIdx).some((m) => {
-                const update = m.raw?.params?.update;
-                return update?.toolCallId === toolCallId && update?.sessionUpdate === "tool_call";
-              });
-              if (hasPendingBefore) return null;
+              if (parsed.type === "permission") {
+                const { toolCall, options } = parsed.content;
+                const currentMsgIdx = messages.indexOf(msg);
+                const alreadyAnswered = messages.slice(currentMsgIdx + 1).some((m) => m.type === "permission_response");
+                if (alreadyAnswered) return null;
 
-              const { kind, rawOutput } = parsed.content;
-              return (
-                <ToolResultBubble
-                  key={msg.id}
-                  title={undefined}
-                  kind={kind}
-                  rawOutput={rawOutput}
-                  timestamp={msg.timestamp}
-                  compact={true}
-                />
-              );
-            }
+                return (
+                  <PermissionBubble
+                    key={msg.id}
+                    toolCall={toolCall}
+                    options={options}
+                    onRespond={onPermissionResponse}
+                    timestamp={msg.timestamp}
+                    workspacePath={workspacePath}
+                  />
+                );
+              }
 
-            // --- PERMISSION REQUEST ---
-            if (parsed.type === "permission") {
-              const { toolCall, options } = parsed.content;
-              const currentMsgIdx = messages.indexOf(msg);
-              const alreadyAnswered = messages.slice(currentMsgIdx + 1).some((m) => m.type === "permission_response");
-              if (alreadyAnswered) return null;
+              if (parsed.type === "permission_response") return null;
 
-              return (
-                <PermissionBubble
-                  key={msg.id}
-                  toolCall={toolCall}
-                  options={options}
-                  onRespond={onPermissionResponse}
-                  timestamp={msg.timestamp}
-                  workspacePath={workspacePath}
-                />
-              );
-            }
-
-            // --- PERMISSION RESPONSE (hidden, shown inline in tool bubble) ---
-            if (parsed.type === "permission_response") return null;
-
-            return null;
-          })
+              return null;
+            })}
+          </>
         )}
 
-        {/* Agent status indicator */}
         {activeThread.status !== "idle" && (
           <StatusIndicatorPillMobile status={activeThread.status} />
         )}
 
-        {/* Error pill */}
         {!isAgentBusy && activeThread.lastError && (
           <div className="text-center py-2">
             <div className="inline-flex items-center gap-2 bg-red-500/10 border border-red-500/30 text-red-300 font-mono text-[11px] px-3 py-1.5 rounded-full">
