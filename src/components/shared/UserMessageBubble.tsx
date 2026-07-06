@@ -7,6 +7,7 @@
  */
 
 import React from "react";
+import CopyButton from "../CopyButton";
 import { formatTimestamp } from "../../utils/formatTimestamp";
 
 interface UserMessageBubbleProps {
@@ -29,13 +30,16 @@ export const UserMessageBubble = React.memo(function UserMessageBubble({
     // Mobile layout
     return (
       <div className={`flex justify-end min-w-0 ${opacityClass}`}>
-        <div className="max-w-full bg-[#18181B] border border-white/5 p-2.5 rounded-lg rounded-tr-none text-xs overflow-hidden">
+        <div className="max-w-full bg-[#18181B] border border-white/5 p-2.5 rounded-lg rounded-tr-none text-xs overflow-hidden select-text">
           <p className="leading-relaxed text-slate-200 whitespace-pre-wrap break-words">
             {content}
           </p>
-          <div className="text-[9px] text-slate-500 font-mono mt-1 text-right">
+          <div className="text-[9px] text-slate-500 font-mono mt-1 text-right select-none">
             {formattedTime}
           </div>
+        </div>
+        <div className="flex items-end ml-1.5">
+          <CopyButton content={content} />
         </div>
       </div>
     );
@@ -44,12 +48,17 @@ export const UserMessageBubble = React.memo(function UserMessageBubble({
   // Desktop layout
   return (
     <div className={`flex justify-end max-w-4xl mx-auto w-full group animate-fadeIn select-text px-2 sm:px-0 ${opacityClass}`}>
-      <div className="max-w-[85%] sm:max-w-[80%] bg-[#18181B] border border-white/5 p-3 sm:p-4 rounded-lg sm:rounded-2xl rounded-tr-none text-xs sm:text-sm">
-        <p className="leading-relaxed text-slate-200 whitespace-pre-wrap break-words">
-          {content}
-        </p>
-        <div className="text-[9px] sm:text-[10px] text-slate-500 font-mono mt-2 text-right select-none">
-          {formattedTime}
+      <div className="flex flex-col items-end">
+        <div className="max-w-[85%] sm:max-w-[80%] bg-[#18181B] border border-white/5 p-3 sm:p-4 rounded-lg sm:rounded-2xl rounded-tr-none text-xs sm:text-sm">
+          <p className="leading-relaxed text-slate-200 whitespace-pre-wrap break-words">
+            {content}
+          </p>
+          <div className="text-[9px] sm:text-[10px] text-slate-500 font-mono mt-2 text-right select-none">
+            {formattedTime}
+          </div>
+        </div>
+        <div className="mt-1">
+          <CopyButton content={content} />
         </div>
       </div>
     </div>
