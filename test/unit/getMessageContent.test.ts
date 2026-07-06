@@ -102,6 +102,24 @@ function getMessageContent(msg: Message): { type: string; content: any } | null 
         };
       }
     }
+
+    // 3h. FALLBACK: Plain text response from agent
+    // If content is a string directly or an object with text property
+    if (typeof update.content === 'string' && update.content) {
+      return {
+        type: "agent_text",
+        content: update.content,
+      };
+    }
+    if (update.content && typeof update.content === 'object' && !Array.isArray(update.content)) {
+      const textValue = update.content.text || update.content.content || update.content.message;
+      if (typeof textValue === 'string' && textValue) {
+        return {
+          type: "agent_text",
+          content: textValue,
+        };
+      }
+    }
   }
 
   // 4. SESSION/REQUEST PERMISSION: Permission prompt from ACP
@@ -268,6 +286,78 @@ describe("getMessageContent", () => {
       };
       const result = getMessageContent(msg);
       expect(result).toEqual({ type: "agent_text", content: "found it" });
+    });
+
+    it("should parse session/update with direct string content", () => {
+      const msg: Message = {
+        id: "msg-1",
+        threadId: "t-1",
+        timestamp: "2024-01-01T00:00:00Z",
+        raw: {
+          params: {
+            update: {
+              content: "Plain text response from agent",
+            },
+          },
+        },
+        type: "session/update",
+      };
+      const result = getMessageContent(msg);
+      expect(result).toEqual({ type: "agent_text", content: "Plain text response from agent" });
+    });
+
+    it("should parse session/update with object content.text", () => {
+      const msg: Message = {
+        id: "msg-1",
+        threadId: "t-1",
+        timestamp: "2024-01-01T00:00:00Z",
+        raw: {
+          params: {
+            update: {
+              content: { text: "Response text" },
+            },
+          },
+        },
+        type: "session/update",
+      };
+      const result = getMessageContent(msg);
+      expect(result).toEqual({ type: "agent_text", content: "Response text" });
+    });
+
+    it("should parse session/update with object content.content", () => {
+      const msg: Message = {
+        id: "msg-1",
+        threadId: "t-1",
+        timestamp: "2024-01-01T00:00:00Z",
+        raw: {
+          params: {
+            update: {
+              content: { content: "Nested response" },
+            },
+          },
+        },
+        type: "session/update",
+      };
+      const result = getMessageContent(msg);
+      expect(result).toEqual({ type: "agent_text", content: "Nested response" });
+    });
+
+    it("should parse session/update with object content.message", () => {
+      const msg: Message = {
+        id: "msg-1",
+        threadId: "t-1",
+        timestamp: "2024-01-01T00:00:00Z",
+        raw: {
+          params: {
+            update: {
+              content: { message: "Message response" },
+            },
+          },
+        },
+        type: "session/update",
+      };
+      const result = getMessageContent(msg);
+      expect(result).toEqual({ type: "agent_text", content: "Message response" });
     });
   });
 

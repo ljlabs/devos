@@ -271,6 +271,7 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
 
       const existing = sqliteDb.getMessageByThreadAndMessageId(threadId, messageId);
       if (existing) {
+        logInfo("server", `[CHUNK FOUND] Accumulating chunk into existing message ${existing.id}`, threadId);
         // Append the new text chunk
         const updatedRaw = JSON.parse(JSON.stringify(existing.raw)); // deep clone
         const existingUpdate = updatedRaw.params?.update;
@@ -284,6 +285,7 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
         return; // Early return — no thread state changes for chunks
       }
       // No existing message with this messageId — fall through to create one
+      logInfo("server", `[CHUNK NEW] First chunk - creating new message for messageId=${messageId}`, threadId);
     }
 
     // Store the raw ACP message verbatim + update thread state

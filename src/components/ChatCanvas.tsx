@@ -138,6 +138,24 @@ export function getMessageContent(msg: Message): { type: string; content: any } 
         };
       }
     }
+
+    // 3h. FALLBACK: Plain text response from agent
+    // If content is a string directly or an object with text property
+    if (typeof update.content === 'string' && update.content) {
+      return {
+        type: "agent_text",
+        content: update.content,
+      };
+    }
+    if (update.content && typeof update.content === 'object' && !Array.isArray(update.content)) {
+      const textValue = update.content.text || update.content.content || update.content.message;
+      if (typeof textValue === 'string' && textValue) {
+        return {
+          type: "agent_text",
+          content: textValue,
+        };
+      }
+    }
   }
 
   // 4. SESSION/REQUEST PERMISSION: Permission prompt from ACP
