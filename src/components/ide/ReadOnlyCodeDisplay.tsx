@@ -68,7 +68,9 @@ export default function ReadOnlyCodeDisplay({ filePath, content }: ReadOnlyCodeD
   const highlightedLines = useMemo(() => highlightCode(content, language), [content, language]);
 
   return (
-    <div className="flex-1 overflow-auto bg-[#0B0B0C] p-4 font-mono text-sm leading-relaxed">
+    <div className="flex-1 overflow-auto bg-[#0B0B0C] p-4 font-mono text-sm leading-relaxed"
+      style={{ WebkitOverflowScrolling: "touch", overscrollBehavior: "contain" }}
+    >
       <div className="space-y-0 select-text">
         {highlightedLines.map((line, lineNum) => (
           <div key={lineNum} className="flex gap-4 hover:bg-white/5 px-2 py-0.5 transition-colors">

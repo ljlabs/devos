@@ -206,13 +206,13 @@ describe("SSE Routes — Event Streaming", () => {
       let intervalSet = false;
       let intervalCleared = false;
       
-      const mockSetInterval = vi.fn(() => {
+      const mockSetInterval = vi.fn((_fn: Function, _ms: number) => {
         intervalSet = true;
-        return 123; // Return interval ID
+        return 123 as unknown as ReturnType<typeof setInterval>;
       });
       
-      const mockClearInterval = vi.fn((id: number) => {
-        if (id === 123) intervalCleared = true;
+      const mockClearInterval = vi.fn((_id: ReturnType<typeof setInterval>) => {
+        intervalCleared = true;
       });
 
       // Simulate the route logic

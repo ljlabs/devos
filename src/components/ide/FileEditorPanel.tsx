@@ -8,11 +8,12 @@
  */
 
 import React, { useCallback, useRef, useEffect } from "react";
-import { FileText, Save, Undo2, Redo2, X, Type } from "lucide-react";
+import { FileText, Save, Undo2, Redo2, X, Type, Eye, EyeOff } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { FileContent } from "../../types";
 import { DEVOS_THEME, getLanguageFromPath } from "./IdeConstants";
 import ReadOnlyCodeDisplay from "./ReadOnlyCodeDisplay";
+import MarkdownPreview from "./MarkdownPreview";
 
 interface EditorTab {
   path: string;
@@ -59,6 +60,7 @@ export default function FileEditorPanel({
 }: FileEditorPanelProps) {
   const editorRef = useRef<any>(null);
   const [selectMode, setSelectMode] = React.useState(false);
+  const [markdownPreview, setMarkdownPreview] = React.useState(false);
 
   // Suppress Monaco's benign CancellationError on unmount — known @monaco-editor/react issue
   useEffect(() => {
@@ -78,6 +80,7 @@ export default function FileEditorPanel({
   const currentPath = isMultiTab ? activeTab?.path : activeFilePath;
   const currentContent = isMultiTab ? activeTab?.content : editorContent;
   const currentIsDirty = isMultiTab ? activeTab?.isDirty ?? false : isDirty ?? false;
+  const isMarkdownFile = (currentPath || "").endsWith(".md");
 
   const handleEditorMount = useCallback((editor: any, monaco: any) => {
     editorRef.current = editor;
@@ -108,6 +111,11 @@ export default function FileEditorPanel({
       run: () => editor.trigger("keyboard", "redo"),
     });
   }, [onSave]);
+
+  // Reset preview when switching to a non-markdown file
+  useEffect(() => {
+    if (!isMarkdownFile) setMarkdownPreview(false);
+  }, [isMarkdownFile]);
 
   if (isLoading) {
     return (
@@ -190,6 +198,19 @@ export default function FileEditorPanel({
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
+              {isMarkdownFile && (
+                <button
+                  onClick={() => setMarkdownPreview(!markdownPreview)}
+                  className={`p-1 transition-colors ${
+                    markdownPreview
+                      ? "text-emerald-400 hover:text-emerald-300"
+                      : "text-slate-500 hover:text-white"
+                  }`}
+                  title={markdownPreview ? "Show source" : "Preview markdown"}
+                >
+                  {markdownPreview ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              )}
               {isMobile && (
                 <button
                   onClick={() => setSelectMode(!selectMode)}
@@ -254,6 +275,19 @@ export default function FileEditorPanel({
             {workspacePath && currentPath ? `${workspacePath}/${currentPath}` : currentPath}
           </span>
           <div className="flex items-center gap-1 flex-shrink-0">
+            {isMarkdownFile && (
+              <button
+                onClick={() => setMarkdownPreview(!markdownPreview)}
+                className={`p-1 transition-colors ${
+                  markdownPreview
+                    ? "text-emerald-400 hover:text-emerald-300"
+                    : "text-slate-500 hover:text-white"
+                }`}
+                title={markdownPreview ? "Show source" : "Preview markdown"}
+              >
+                {markdownPreview ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            )}
             <button
               onClick={() => {
                 editorRef.current?.focus();
@@ -291,8 +325,10 @@ export default function FileEditorPanel({
       )}
 
       {/* Editor */}
-      <div className="flex-1 min-h-0 w-full overflow-hidden">
-        {isMobile && selectMode ? (
+      <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
+        {markdownPreview && isMarkdownFile ? (
+          <MarkdownPreview content={currentContent || ""} />
+        ) : isMobile && selectMode ? (
           <ReadOnlyCodeDisplay filePath={currentPath || ""} content={currentContent || ""} />
         ) : (
           <Editor

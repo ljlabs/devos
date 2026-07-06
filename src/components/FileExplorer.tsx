@@ -252,7 +252,7 @@ interface TouchDragState {
   sourcePath: string;
   sourceType: string;
   ghost: HTMLDivElement | null;
-  lastTarget: Element | null;
+  lastTarget: HTMLElement | null;
   hoverTimeout: NodeJS.Timeout | null;
 }
 
