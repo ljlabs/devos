@@ -2099,3 +2099,167 @@ describe("AllowedPatterns CRUD — integration with real SQLite", () => {
 		});
 	});
 });
+
+
+// ---------------------------------------------------------------------------
+// Messages Pagination API — integration tests for GET /api/threads/:threadId/messages/paginated
+// ---------------------------------------------------------------------------
+
+describe("GET /api/threads/:threadId/messages/paginated — message pagination", () => {
+  let wsId: string;
+  let threadId: string;
+
+  beforeEach(() => {
+    seedDb({ workspaces: [], threads: [], messages: [], allowedPatterns: [] });
+    wsId = `ws-pag-${Date.now()}`;
+    threadId = `t-pag-${Date.now()}`;
+    sqliteDb.insertWorkspace({ id: wsId, name: "Pagination Test WS", path: VALID_DIR });
+    sqliteDb.insertThread({ id: threadId, workspaceId: wsId, title: "Pagination Thread", status: "idle" });
+  });
+
+  it("returns latest 10 messages with default limit", async () => {
+    // Insert 15 messages (timestamps in ascending order for SQL)
+    const baseTime = Date.now();
+    for (let i = 0; i < 15; i++) {
+      sqliteDb.insertMessage({
+        id: `msg-${i}`,
+        threadId,
+        timestamp: new Date(baseTime - (15 - i) * 60000).toISOString(), // i=0 is oldest
+        raw: { content: `Message ${i}` },
+        type: "user_message",
+      });
+    }
+
+    const res = await request(app).get(`/api/threads/${threadId}/messages/paginated`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toHaveLength(10);
+    expect(res.body.hasMore).toBe(true);
+    expect(res.body.total).toBe(15);
+    // Messages should be newest-first (reverse order)
+    expect(res.body.messages[0].id).toBe("msg-14");
+    expect(res.body.messages[9].id).toBe("msg-5");
+  });
+
+  it("respects custom limit query parameter", async () => {
+    for (let i = 0; i < 20; i++) {
+      sqliteDb.insertMessage({
+        id: `msg-${i}`,
+        threadId,
+        timestamp: new Date(Date.now() - (20 - i) * 60000).toISOString(),
+        raw: { content: `Message ${i}` },
+        type: "user_message",
+      });
+    }
+
+    const res = await request(app).get(`/api/threads/${threadId}/messages/paginated?limit=5`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toHaveLength(5);
+    expect(res.body.hasMore).toBe(true);
+    expect(res.body.total).toBe(20);
+  });
+
+  it("caps limit at 200 (max per request)", async () => {
+    for (let i = 0; i < 15; i++) {
+      sqliteDb.insertMessage({
+        id: `msg-${i}`,
+        threadId,
+        timestamp: new Date(Date.now() - (15 - i) * 60000).toISOString(),
+        raw: { content: `Message ${i}` },
+        type: "user_message",
+      });
+    }
+
+    const res = await request(app).get(`/api/threads/${threadId}/messages/paginated?limit=500`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toHaveLength(15);
+    expect(res.body.hasMore).toBe(false); // 15 messages < 200 limit
+    expect(res.body.total).toBe(15);
+  });
+
+  it("returns hasMore=false when all messages fit in one page", async () => {
+    for (let i = 0; i < 5; i++) {
+      sqliteDb.insertMessage({
+        id: `msg-${i}`,
+        threadId,
+        timestamp: new Date(Date.now() - (5 - i) * 60000).toISOString(),
+        raw: { content: `Message ${i}` },
+        type: "user_message",
+      });
+    }
+
+    const res = await request(app).get(`/api/threads/${threadId}/messages/paginated?limit=10`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toHaveLength(5);
+    expect(res.body.hasMore).toBe(false);
+    expect(res.body.total).toBe(5);
+  });
+
+  it("returns empty messages array for thread with no messages", async () => {
+    const res = await request(app).get(`/api/threads/${threadId}/messages/paginated`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toEqual([]);
+    expect(res.body.hasMore).toBe(false);
+    expect(res.body.total).toBe(0);
+  });
+
+  it("returns total message count even when limit filters results", async () => {
+    for (let i = 0; i < 50; i++) {
+      sqliteDb.insertMessage({
+        id: `msg-${i}`,
+        threadId,
+        timestamp: new Date(Date.now() - (50 - i) * 60000).toISOString(),
+        raw: { content: `Message ${i}` },
+        type: "user_message",
+      });
+    }
+
+    const res = await request(app).get(`/api/threads/${threadId}/messages/paginated?limit=10`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toHaveLength(10);
+    expect(res.body.total).toBe(50);
+    expect(res.body.hasMore).toBe(true);
+  });
+
+  it("handles invalid threadId gracefully (returns empty)", async () => {
+    const res = await request(app).get("/api/threads/nonexistent-thread-id/messages/paginated");
+
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toEqual([]);
+    expect(res.body.hasMore).toBe(false);
+    expect(res.body.total).toBe(0);
+  });
+
+  it("returns newest messages first (correct sort order for chat UI)", async () => {
+    // Insert messages with specific timestamps
+    const timestamps = [
+      "2024-01-01T10:00:00Z",
+      "2024-01-01T10:01:00Z",
+      "2024-01-01T10:02:00Z",
+    ];
+
+    for (let i = 0; i < timestamps.length; i++) {
+      sqliteDb.insertMessage({
+        id: `msg-${i}`,
+        threadId,
+        timestamp: timestamps[i],
+        raw: { content: `Message ${i}` },
+        type: "user_message",
+      });
+    }
+
+    const res = await request(app).get(`/api/threads/${threadId}/messages/paginated?limit=10`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toHaveLength(3);
+    // Newest first: msg-2, msg-1, msg-0
+    expect(res.body.messages[0].id).toBe("msg-2");
+    expect(res.body.messages[1].id).toBe("msg-1");
+    expect(res.body.messages[2].id).toBe("msg-0");
+  });
+});

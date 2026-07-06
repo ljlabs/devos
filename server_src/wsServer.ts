@@ -108,7 +108,7 @@ function subscribeClient(ws: WebSocket, threadId: string, readDb: (threadId: str
   subscribers.add(ws);
 
   // Send current state for the thread — targeted query, not full DB read
-  const { thread, messages } = sqliteDb.getThreadWithMessages(threadId);
+  const { thread, messages } = readDb(threadId);
 
   sendJson(ws, {
     type: "subscribed",

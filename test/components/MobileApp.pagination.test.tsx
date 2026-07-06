@@ -120,6 +120,12 @@ beforeEach(() => {
     const path = typeof url === "string" ? url : String(url);
     if (path === "/api/workspaces/ws-1") return jsonResponse({ id: "ws-1", name: "Mobile Project", path: "/projects/mobile" });
     if (path === "/api/workspaces/ws-1/threads") return jsonResponse(mockThreads);
+    // Handle single thread fetch
+    if (path.startsWith("/api/threads/")) {
+      const id = path.split("/api/threads/")[1];
+      const thread = mockThreads.find(t => t.id === id);
+      return jsonResponse(thread ?? null);
+    }
     return jsonResponse([]);
   });
 

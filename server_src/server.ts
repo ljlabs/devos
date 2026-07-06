@@ -346,7 +346,7 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
 // ---------------------------------------------------------------------------
 
 app.get("/api/workspaces", (_req, res) => {
-  const allWorkspaces = readDb().workspaces;
+  const allWorkspaces = sqliteDb.getAllWorkspaces();
 
   // Validate all workspace paths and remove invalid ones
   const invalidIds: string[] = [];
@@ -389,6 +389,10 @@ app.post("/api/allowedPatterns", (req, res) => {
   if (!pattern || typeof pattern !== "string") {
     return res.status(400).json({ error: "pattern (string) required" });
   }
+  // Validate pattern max length (prevent unbounded regex patterns)
+  if (pattern.length > 500) {
+    return res.status(400).json({ error: "pattern must be 500 characters or less" });
+  }
   const existing = sqliteDb.getAllowedPatterns();
   const exists = existing.some(
     (p) => (p.pattern || (p as any)) === pattern && p.toolName === (toolName ?? undefined)
@@ -415,6 +419,10 @@ app.delete("/api/allowedPatterns", (req, res) => {
 app.post("/api/workspaces", (req, res) => {
   const { name, path: wsPath } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: "name required" });
+  // Validate workspace name max length
+  if (name.length > 200) {
+    return res.status(400).json({ error: "workspace name must be 200 characters or less" });
+  }
 
   // A path is REQUIRED and MUST point to an existing directory on this machine.
   // We never silently fall back to a generated sandbox path — that hides
@@ -836,6 +844,10 @@ app.get("/api/threads/:threadId", (req, res) => {
 app.patch("/api/threads/:threadId", (req, res) => {
   const { title } = req.body;
   if (!title) return res.status(400).json({ error: "title required" });
+  // Validate thread title max length
+  if (title.length > 200) {
+    return res.status(400).json({ error: "thread title must be 200 characters or less" });
+  }
   const updated = sqliteDb.updateThread(req.params.threadId, { title });
   if (!updated) return res.status(404).json({ error: "not found" });
   res.json(updated);
@@ -885,16 +897,14 @@ app.get("/api/threads/:threadId/messages", (req, res) => {
  * hasMore is true when there are older messages beyond the window.
  */
 app.get("/api/threads/:threadId/messages/paginated", (req, res) => {
+  const { threadId } = req.params;
   const limit = Math.min(parseInt(req.query.limit as string) || 10, 200);
-  const db = readDb();
-  const all = db.messages
-    .filter((m) => m.threadId === req.params.threadId)
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  const messages = all.slice(0, limit);
+  const total = sqliteDb.getMessageCount(threadId);
+  const messages = sqliteDb.getMessages(threadId, 0, limit); // newest first
   res.json({
     messages,
-    hasMore: all.length > limit,
-    total: all.length,
+    hasMore: total > limit,
+    total,
   });
 });
 
@@ -911,6 +921,10 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
   const { threadId } = req.params;
   const { text } = req.body;
   if (!text || !text.trim()) return res.status(400).json({ error: "text required" });
+  // Validate message text max length (prevent unbounded messages)
+  if (text.length > 50000) {
+    return res.status(400).json({ error: "message text must be 50000 characters or less" });
+  }
 
   const thread = sqliteDb.getThreadById(threadId);
   if (!thread) return res.status(404).json({ error: "thread not found" });

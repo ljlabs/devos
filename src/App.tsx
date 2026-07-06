@@ -5,12 +5,11 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Routes, Route, useParams, useNavigate, Navigate, useLocation, Outlet } from "react-router-dom";
-import { History } from "lucide-react";
 import WorkspaceSidebar from "./components/WorkspaceSidebar";
 import ThreadList from "./components/ThreadList";
 import ChatCanvas from "./components/ChatCanvas";
 import { WorkspaceModal, SettingsModal } from "./components/Dialogs";
-import { Workspace, Thread, Message, FileEntry, FileContent } from "./types";
+import { Workspace, Thread, Message } from "./types";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useOptimisticMessages } from "./hooks/useOptimisticMessages";
 import { usePaginatedMessages } from "./hooks/usePaginatedMessages";

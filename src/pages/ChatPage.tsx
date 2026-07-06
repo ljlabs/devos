@@ -61,7 +61,10 @@ export default function ChatPage() {
   const handleWsSubscribed = useCallback((_tid: string, _msgs: Message[]) => {
     // Initial messages are loaded via the paginated HTTP endpoint;
     // WS only delivers real-time updates (appendMessage). Don't wipe state here.
-  }, []);
+    // However, trigger a refresh of paginated messages to ensure we're in sync
+    // and don't miss any messages due to timing race conditions.
+    loadMore();
+  }, [loadMore]);
 
   const { sendMessage: wsSendMessage, respondToPermission: wsRespond, cancelAgent: wsCancel } = useWebSocket({
     threadId: threadId || null,

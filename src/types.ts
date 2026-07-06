@@ -75,8 +75,8 @@ export interface DatabaseSchema {
   threads: Thread[];
   messages: Message[];
 
-  // New: Per-workspace "allow similar" patterns with variants
-  allowedPatterns?: AllowSimilarPattern[];
+  // Per-workspace "allow similar" patterns with variants
+  allowedPatterns: AllowSimilarPattern[];
 }
 
 // ---------------------------------------------------------------------------

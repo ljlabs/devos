@@ -115,6 +115,10 @@ export class SqliteDb {
     return this.getWorkspaceById(id);
   }
 
+  getAllWorkspaces(): Workspace[] {
+    return this.db.prepare("SELECT * FROM workspaces").all() as Workspace[];
+  }
+
   // --- Threads ---
 
   getThreadById(id: string): Thread | undefined {
