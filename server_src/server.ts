@@ -892,20 +892,44 @@ app.get("/api/threads/:threadId/messages", (req, res) => {
 
 /**
  * GET /api/threads/:threadId/messages/paginated
- * Query params: limit (default 10, max 200)
- * Returns the latest `limit` messages, newest first.
- * hasMore is true when there are older messages beyond the window.
+ * Query params: 
+ *   - cursor (optional): message ID to fetch older messages before. If not provided, fetches latest.
+ *   - limit (optional, default 10, max 200): how many messages to fetch.
+ * 
+ * Returns messages in descending timestamp order (newest first), with pagination cursor.
+ * When you reach the oldest message, hasMore will be false and nextCursor will be null.
  */
 app.get("/api/threads/:threadId/messages/paginated", (req, res) => {
   const { threadId } = req.params;
+  const cursor = (req.query.cursor as string) || null;
   const limit = Math.min(parseInt(req.query.limit as string) || 10, 200);
-  const total = sqliteDb.getMessageCount(threadId);
-  const messages = sqliteDb.getMessages(threadId, 0, limit); // newest first
-  res.json({
-    messages,
-    hasMore: total > limit,
-    total,
-  });
+
+  try {
+    const messages = sqliteDb.getMessagesBefore(threadId, cursor, limit);
+
+    // Determine if there are more older messages beyond this batch
+    let hasMore = false;
+    let nextCursor = null;
+    
+    if (messages.length > 0) {
+      const oldestMessageId = messages[messages.length - 1].id;
+      hasMore = sqliteDb.hasMessagesBefore(threadId, oldestMessageId);
+      // Only set nextCursor if there are more messages to load
+      if (hasMore) {
+        nextCursor = oldestMessageId;
+      }
+    }
+
+    res.json({
+      messages,
+      hasMore,
+      nextCursor,
+      total: sqliteDb.getMessageCount(threadId),
+    });
+  } catch (err: any) {
+    console.error("[pagination] error:", err);
+    res.status(500).json({ error: "Failed to fetch messages" });
+  }
 });
 
 /**

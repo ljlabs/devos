@@ -2,11 +2,12 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * usePaginatedMessages - Expanding-window message loading hook.
+ * usePaginatedMessages - Cursor-based message loading hook.
  *
- * Starts by showing the latest PAGE_SIZE messages. When the user scrolls up,
- * the limit grows by PAGE_SIZE each time (10 → 20 → 30 …) so the visible
- * window always ends at the latest message and just gets taller.
+ * Fetches messages in batches using a cursor-based approach.
+ * First page: cursor = null (returns latest messages).
+ * Subsequent pages: cursor = oldest message ID from previous page.
+ * Prevents multiple concurrent load requests via isLoadingMore flag.
  */
 
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
@@ -15,15 +16,15 @@ import type { Message } from "../types";
 export interface UsePaginatedMessagesReturn {
   /** Currently loaded messages (oldest first for display) */
   messages: Message[];
-  /** Load older messages (grows the window) */
+  /** Load older messages (with cursor-based pagination) */
   loadMore: () => Promise<void>;
-  /** Whether older messages exist beyond the current window */
+  /** Whether older messages exist beyond the current load */
   hasMore: boolean;
   /** Whether a load-more request is in progress */
   isLoadingMore: boolean;
   /** Total message count in the thread */
   totalCount: number;
-  /** Re-fetch with the current limit (picks up new messages) */
+  /** Re-fetch with the current cursor to pick up new messages */
   refresh: () => void;
   /** Whether the initial load is still in progress */
   isLoading: boolean;
@@ -33,48 +34,78 @@ const PAGE_SIZE = 10;
 
 export function usePaginatedMessages(threadId: string | null): UsePaginatedMessagesReturn {
   const [allMessages, setAllMessages] = useState<Message[]>([]);
-  const [limit, setLimit] = useState(PAGE_SIZE);
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
 
+  // Keep track of the oldest message ID we've fetched (used as cursor for next page)
+  const cursorRef = useRef<string | null>(null);
+  // Track confirmed IDs to prevent duplicates when refreshing
   const confirmedIdsRef = useRef<Set<string>>(new Set());
+  // Track if a loadMore is currently in flight
+  const isLoadingMoreRef = useRef(false);
 
-  // Fetch latest `currentLimit` messages
-  const fetchMessages = useCallback(async (currentLimit: number, isLoadMore: boolean) => {
-    if (!threadId) return;
+  // Fetch messages with cursor
+  const fetchMessages = useCallback(
+    async (cursor: string | null, isLoadMore: boolean) => {
+      if (!threadId) return;
 
-    if (isLoadMore) setIsLoadingMore(true);
-    else setIsLoading(true);
-
-    try {
-      const res = await fetch(`/api/threads/${threadId}/messages/paginated?limit=${currentLimit}`);
-      const data = res.ok ? await res.json() : { messages: [], hasMore: false, total: 0 };
-
-      // Server returns newest-first, reverse for oldest-first display
-      const msgs: Message[] = (data.messages || []).reverse();
-
-      // Deduplicate
-      const newMsgs = msgs.filter(m => !confirmedIdsRef.current.has(m.id));
-      newMsgs.forEach(m => confirmedIdsRef.current.add(m.id));
+      // Prevent concurrent requests while one is already in flight
+      if (isLoadMore && isLoadingMoreRef.current) return;
 
       if (isLoadMore) {
-        // Prepend older messages (they're older than everything we already have)
-        setAllMessages(prev => [...newMsgs, ...prev]);
+        setIsLoadingMore(true);
+        isLoadingMoreRef.current = true;
       } else {
-        setAllMessages(msgs);
+        setIsLoading(true);
       }
 
-      setHasMore(data.hasMore ?? false);
-      setTotalCount(data.total ?? 0);
-    } catch (err) {
-      console.error("Failed to fetch messages:", err);
-    } finally {
-      setIsLoadingMore(false);
-      setIsLoading(false);
-    }
-  }, [threadId]);
+      try {
+        const url = cursor
+          ? `/api/threads/${threadId}/messages/paginated?cursor=${cursor}&limit=${PAGE_SIZE}`
+          : `/api/threads/${threadId}/messages/paginated?limit=${PAGE_SIZE}`;
+
+        const res = await fetch(url);
+        const data = res.ok
+          ? await res.json()
+          : { messages: [], hasMore: false, total: 0, nextCursor: null };
+
+        // Server returns newest-first, reverse for oldest-first display
+        const msgs: Message[] = (data.messages || []).reverse();
+
+        // Deduplicate
+        const newMsgs = msgs.filter((m) => !confirmedIdsRef.current.has(m.id));
+        newMsgs.forEach((m) => confirmedIdsRef.current.add(m.id));
+
+        if (isLoadMore) {
+          // Prepend older messages to the front
+          setAllMessages((prev) => [...newMsgs, ...prev]);
+        } else {
+          // Initial load: replace all
+          setAllMessages(msgs);
+        }
+
+        setHasMore(data.hasMore ?? false);
+        setTotalCount(data.total ?? 0);
+
+        // Update cursor for next page (points to the oldest message ID in the current batch)
+        if (data.nextCursor) {
+          cursorRef.current = data.nextCursor;
+        }
+      } catch (err) {
+        console.error("Failed to fetch messages:", err);
+      } finally {
+        if (isLoadMore) {
+          setIsLoadingMore(false);
+          isLoadingMoreRef.current = false;
+        } else {
+          setIsLoading(false);
+        }
+      }
+    },
+    [threadId]
+  );
 
   // Reset and fetch initial page when thread changes
   useEffect(() => {
@@ -86,25 +117,26 @@ export function usePaginatedMessages(threadId: string | null): UsePaginatedMessa
       return;
     }
 
-    setLimit(PAGE_SIZE);
+    cursorRef.current = null;
     confirmedIdsRef.current.clear();
-    fetchMessages(PAGE_SIZE, false);
+    isLoadingMoreRef.current = false;
+    fetchMessages(null, false);
   }, [threadId, fetchMessages]);
 
-  // Load older messages — grows the window
+  // Load older messages — uses cursor from previous page
   const loadMore = useCallback(async () => {
-    if (!threadId || !hasMore || isLoadingMore) return;
-    const nextLimit = limit + PAGE_SIZE;
-    setLimit(nextLimit);
-    await fetchMessages(nextLimit, true);
-  }, [threadId, hasMore, isLoadingMore, limit, fetchMessages]);
+    if (!threadId || !hasMore || isLoadingMoreRef.current) return;
 
-  // Refresh — re-fetch with current limit to pick up new messages
+    await fetchMessages(cursorRef.current, true);
+  }, [threadId, hasMore, fetchMessages]);
+
+  // Refresh — re-fetch with null cursor (latest messages)
   const refresh = useCallback(() => {
     if (!threadId) return;
+    cursorRef.current = null;
     confirmedIdsRef.current.clear();
-    fetchMessages(limit, false);
-  }, [threadId, limit, fetchMessages]);
+    fetchMessages(null, false);
+  }, [threadId, fetchMessages]);
 
   // Sort oldest-first for display
   const messages = useMemo(() => {

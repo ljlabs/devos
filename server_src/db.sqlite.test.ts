@@ -1750,3 +1750,258 @@ describe("SqliteDb - Targeted Query Methods", () => {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cursor-based pagination
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("Cursor-based pagination (getMessagesBefore, hasMessagesBefore)", () => {
+  let testDbPath: string;
+  let db: SqliteDb;
+
+  beforeEach(() => {
+    testDbPath = path.join(os.tmpdir(), `test-cursor-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+    db = new SqliteDb(testDbPath);
+  });
+
+  afterEach(() => {
+    db.close();
+    for (const ext of ["", "-shm", "-wal"]) {
+      if (fs.existsSync(testDbPath + ext)) fs.unlinkSync(testDbPath + ext);
+    }
+  });
+
+  describe("getMessagesBefore", () => {
+    beforeEach(() => {
+      db.insertWorkspace({ id: "ws", name: "WS", path: "/ws" });
+      db.insertThread({ id: "t1", workspaceId: "ws", title: "T1", status: "idle" });
+      
+      // Insert 10 messages with 1-hour timestamps apart
+      for (let i = 0; i < 10; i++) {
+        db.insertMessage({
+          id: `m-${i}`,
+          threadId: "t1",
+          timestamp: new Date(new Date("2024-01-01T00:00:00Z").getTime() + i * 3600000).toISOString(),
+          raw: { index: i },
+          type: "user_message",
+        });
+      }
+    });
+
+    it("returns latest messages when cursorId is null", () => {
+      const msgs = db.getMessagesBefore("t1", null, 3);
+      expect(msgs).toHaveLength(3);
+      // Should be newest first (DESC order)
+      expect(msgs[0].raw.index).toBe(9);
+      expect(msgs[1].raw.index).toBe(8);
+      expect(msgs[2].raw.index).toBe(7);
+    });
+
+    it("returns messages before the cursor", () => {
+      // Get messages before m-5 (5th message)
+      const msgs = db.getMessagesBefore("t1", "m-5", 3);
+      expect(msgs).toHaveLength(3);
+      // Should be older than m-5, newest-first
+      expect(msgs[0].raw.index).toBe(4);
+      expect(msgs[1].raw.index).toBe(3);
+      expect(msgs[2].raw.index).toBe(2);
+    });
+
+    it("returns fewer messages when fewer exist before cursor", () => {
+      // Get messages before m-2 (only 2 older messages exist)
+      const msgs = db.getMessagesBefore("t1", "m-2", 10);
+      expect(msgs).toHaveLength(2);
+      expect(msgs[0].raw.index).toBe(1);
+      expect(msgs[1].raw.index).toBe(0);
+    });
+
+    it("returns empty array when no older messages exist", () => {
+      // Try to get messages before the oldest message
+      const msgs = db.getMessagesBefore("t1", "m-0", 10);
+      expect(msgs).toHaveLength(0);
+    });
+
+    it("returns empty array when cursor id does not exist", () => {
+      const msgs = db.getMessagesBefore("t1", "nonexistent", 10);
+      expect(msgs).toHaveLength(0);
+    });
+
+    it("returns newest first (DESC order)", () => {
+      const msgs = db.getMessagesBefore("t1", "m-5", 10);
+      // All messages before m-5, ordered newest-first
+      for (let i = 0; i < msgs.length - 1; i++) {
+        expect(msgs[i].raw.index).toBeGreaterThan(msgs[i + 1].raw.index);
+      }
+    });
+
+    it("respects limit parameter", () => {
+      const msgs3 = db.getMessagesBefore("t1", "m-8", 3);
+      expect(msgs3).toHaveLength(3);
+
+      const msgs5 = db.getMessagesBefore("t1", "m-8", 5);
+      expect(msgs5).toHaveLength(5);
+
+      const msgs100 = db.getMessagesBefore("t1", "m-8", 100);
+      // Only 8 messages exist before m-8
+      expect(msgs100).toHaveLength(8);
+    });
+
+    it("scopes to thread (different thread not included)", () => {
+      db.insertThread({ id: "t2", workspaceId: "ws", title: "T2", status: "idle" });
+      db.insertMessage({
+        id: "m-t2-0",
+        threadId: "t2",
+        timestamp: "2024-01-01T00:00:00Z",
+        raw: { index: 0 },
+        type: "user_message",
+      });
+
+      const msgs = db.getMessagesBefore("t1", "m-5", 100);
+      // Should only get messages from t1
+      const threadIds = new Set(msgs.map(m => m.threadId));
+      expect(threadIds).toEqual(new Set(["t1"]));
+    });
+
+    it("handles cursor with same timestamp as another message (sorts by ID tie-break)", () => {
+      // Create 3 messages with identical timestamps
+      const sameTime = "2024-02-01T00:00:00Z";
+      db.insertMessage({ id: "same-a", threadId: "t1", timestamp: sameTime, raw: { order: "a" }, type: "user_message" });
+      db.insertMessage({ id: "same-b", threadId: "t1", timestamp: sameTime, raw: { order: "b" }, type: "user_message" });
+      db.insertMessage({ id: "same-c", threadId: "t1", timestamp: sameTime, raw: { order: "c" }, type: "user_message" });
+
+      // Get messages before same-b
+      const msgs = db.getMessagesBefore("t1", "same-b", 10);
+      // Should get older messages, not same-b itself or anything newer
+      const ids = msgs.map(m => m.id);
+      expect(ids).not.toContain("same-b");
+      expect(ids).not.toContain("same-c");
+    });
+
+    it("JSON-parses raw field correctly", () => {
+      const msgs = db.getMessagesBefore("t1", "m-5", 1);
+      expect(msgs[0].raw).toEqual({ index: 4 });
+      expect(typeof msgs[0].raw).toBe("object");
+    });
+  });
+
+  describe("hasMessagesBefore", () => {
+    beforeEach(() => {
+      db.insertWorkspace({ id: "ws", name: "WS", path: "/ws" });
+      db.insertThread({ id: "t1", workspaceId: "ws", title: "T1", status: "idle" });
+      
+      for (let i = 0; i < 5; i++) {
+        db.insertMessage({
+          id: `m-${i}`,
+          threadId: "t1",
+          timestamp: new Date(new Date("2024-01-01T00:00:00Z").getTime() + i * 3600000).toISOString(),
+          raw: { index: i },
+          type: "user_message",
+        });
+      }
+    });
+
+    it("returns true when older messages exist before cursor", () => {
+      expect(db.hasMessagesBefore("t1", "m-3")).toBe(true);
+      expect(db.hasMessagesBefore("t1", "m-4")).toBe(true);
+      expect(db.hasMessagesBefore("t1", "m-2")).toBe(true);
+    });
+
+    it("returns false when no older messages exist before cursor", () => {
+      expect(db.hasMessagesBefore("t1", "m-0")).toBe(false);
+    });
+
+    it("returns false when cursor does not exist", () => {
+      expect(db.hasMessagesBefore("t1", "nonexistent")).toBe(false);
+    });
+
+    it("returns false for non-existent thread", () => {
+      expect(db.hasMessagesBefore("nonexistent-thread", "m-3")).toBe(false);
+    });
+
+    it("scopes to thread", () => {
+      db.insertThread({ id: "t2", workspaceId: "ws", title: "T2", status: "idle" });
+      db.insertMessage({
+        id: "m-t2",
+        threadId: "t2",
+        timestamp: "2024-01-01T00:00:00Z",
+        raw: { index: 0 },
+        type: "user_message",
+      });
+
+      // m-t2 has no older messages in t2, even though older messages exist in t1
+      expect(db.hasMessagesBefore("t2", "m-t2")).toBe(false);
+    });
+  });
+
+  describe("pagination workflow", () => {
+    beforeEach(() => {
+      db.insertWorkspace({ id: "ws", name: "WS", path: "/ws" });
+      db.insertThread({ id: "t1", workspaceId: "ws", title: "T1", status: "idle" });
+      
+      // Insert 20 messages
+      for (let i = 0; i < 20; i++) {
+        db.insertMessage({
+          id: `m-${i}`,
+          threadId: "t1",
+          timestamp: new Date(new Date("2024-01-01T00:00:00Z").getTime() + i * 3600000).toISOString(),
+          raw: { index: i },
+          type: "user_message",
+        });
+      }
+    });
+
+    it("simulates frontend pagination flow", () => {
+      // Step 1: Load latest 5 messages (cursorId = null)
+      const page1 = db.getMessagesBefore("t1", null, 5);
+      expect(page1).toHaveLength(5);
+      expect(page1[0].raw.index).toBe(19); // newest
+      expect(page1[4].raw.index).toBe(15); // oldest of this page
+      
+      const oldestInPage1 = page1[page1.length - 1].id; // m-15
+
+      // Step 2: Load next 5 older messages using the cursor
+      const page2 = db.getMessagesBefore("t1", oldestInPage1, 5);
+      expect(page2).toHaveLength(5);
+      expect(page2[0].raw.index).toBe(14); // just before m-15
+      expect(page2[4].raw.index).toBe(10);
+
+      const oldestInPage2 = page2[page2.length - 1].id; // m-10
+
+      // Step 3: Load next 5 older messages
+      const page3 = db.getMessagesBefore("t1", oldestInPage2, 5);
+      expect(page3).toHaveLength(5);
+      expect(page3[0].raw.index).toBe(9);
+      expect(page3[4].raw.index).toBe(5);
+
+      // All messages should have unique IDs (no repeats)
+      const allIds = new Set([...page1, ...page2, ...page3].map(m => m.id));
+      expect(allIds.size).toBe(15);
+
+      // Verify timeline: page1[newest] > page1[oldest] > page2[newest] > page2[oldest] > ...
+      expect(page1[0].raw.index).toBeGreaterThan(page1[4].raw.index);
+      expect(page1[4].raw.index).toBeGreaterThan(page2[0].raw.index);
+      expect(page2[0].raw.index).toBeGreaterThan(page2[4].raw.index);
+      expect(page2[4].raw.index).toBeGreaterThan(page3[0].raw.index);
+      expect(page3[0].raw.index).toBeGreaterThan(page3[4].raw.index);
+    });
+
+    it("hasMessagesBefore integrates with pagination workflow", () => {
+      const page1 = db.getMessagesBefore("t1", null, 5);
+      const oldestInPage1 = page1[page1.length - 1];
+
+      // Should have more messages before this cursor
+      expect(db.hasMessagesBefore("t1", oldestInPage1.id)).toBe(true);
+
+      // Load all remaining and find the actual oldest
+      let cursor = oldestInPage1.id;
+      while (db.hasMessagesBefore("t1", cursor)) {
+        const page = db.getMessagesBefore("t1", cursor, 10);
+        if (page.length === 0) break;
+        cursor = page[page.length - 1].id;
+      }
+
+      // Now cursor should point to the oldest message (no more messages before)
+      expect(db.hasMessagesBefore("t1", cursor)).toBe(false);
+    });
+  });
+});

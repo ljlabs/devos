@@ -436,6 +436,65 @@ export class SqliteDb {
   }
 
   /**
+   * Cursor-based pagination: fetch messages before a cursor (older messages).
+   * If cursorId is null, fetches the latest messages.
+   * Returns messages in reverse chronological order (newest first).
+   */
+  getMessagesBefore(threadId: string, cursorId: string | null, limit: number): Message[] {
+    try {
+      let rows: any[];
+
+      if (cursorId === null) {
+        // No cursor: get the latest `limit` messages
+        rows = this.db.prepare(
+          "SELECT * FROM messages WHERE threadId = ? ORDER BY timestamp DESC LIMIT ?"
+        ).all(threadId, limit) as any[];
+      } else {
+        // With cursor: get messages older than the cursor
+        const cursorRow = this.db.prepare(
+          "SELECT timestamp FROM messages WHERE id = ? AND threadId = ?"
+        ).get(cursorId, threadId) as any;
+
+        if (!cursorRow) return [];
+
+        rows = this.db.prepare(
+          "SELECT * FROM messages WHERE threadId = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT ?"
+        ).all(threadId, cursorRow.timestamp, limit) as any[];
+      }
+
+      return rows.map((row) => ({
+        ...row,
+        raw: JSON.parse(row.raw),
+      })) as Message[];
+    } catch (err: any) {
+      console.error("[db] getMessagesBefore failed:", err.message);
+      return [];
+    }
+  }
+
+  /**
+   * Check if there are older messages before a given cursor.
+   */
+  hasMessagesBefore(threadId: string, cursorId: string): boolean {
+    try {
+      const cursorRow = this.db.prepare(
+        "SELECT timestamp FROM messages WHERE id = ? AND threadId = ?"
+      ).get(cursorId, threadId) as any;
+
+      if (!cursorRow) return false;
+
+      const row = this.db.prepare(
+        "SELECT COUNT(*) as count FROM messages WHERE threadId = ? AND timestamp < ?"
+      ).get(threadId, cursorRow.timestamp) as { count: number };
+
+      return (row?.count ?? 0) > 0;
+    } catch (err: any) {
+      console.error("[db] hasMessagesBefore failed:", err.message);
+      return false;
+    }
+  }
+
+  /**
    * Close the database connection
    */
   close(): void {
