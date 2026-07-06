@@ -143,6 +143,47 @@ export default function IdeRoute() {
     } catch (e) { console.error("Error deleting entry", e); }
   }, [activeWorkspaceId, fetchDirectory]);
 
+  const handleMoveEntry = useCallback(async (sourcePath: string, destParentPath: string) => {
+    console.log(`[IdeRoute] handleMoveEntry called: ${sourcePath} → ${destParentPath}`);
+    try {
+      const res = await fetch(`/api/workspaces/${activeWorkspaceId}/files/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourcePath, destParentPath }),
+      });
+      console.log(`[IdeRoute] move API response status: ${res.status}`);
+      if (res.ok) {
+        console.log(`[IdeRoute] move successful, refreshing directories`);
+        // Refresh source parent directory
+        const srcParentPath = sourcePath.substring(0, sourcePath.lastIndexOf("/"));
+        if (srcParentPath) {
+          console.log(`[IdeRoute] refreshing source parent: ${srcParentPath}`);
+          await fetchDirectory(srcParentPath);
+        } else {
+          console.log(`[IdeRoute] refreshing source root`);
+          await fetchDirectory();
+        }
+        // Refresh destination directory
+        console.log(`[IdeRoute] refreshing destination: ${destParentPath}`);
+        await fetchDirectory(destParentPath);
+        // Update open tab if the moved file was open
+        const fileName = sourcePath.substring(sourcePath.lastIndexOf("/") + 1);
+        const newPath = destParentPath ? `${destParentPath}/${fileName}` : fileName;
+        console.log(`[IdeRoute] updating tabs: ${sourcePath} → ${newPath}`);
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.path === sourcePath ? { ...t, path: newPath } : t
+          )
+        );
+      } else {
+        const error = await res.json();
+        console.error(`[IdeRoute] move failed: ${error.error}`);
+      }
+    } catch (e) {
+      console.error("Error moving entry:", e);
+    }
+  }, [activeWorkspaceId, fetchDirectory]);
+
   useEffect(() => {
     if (activeWorkspaceId) {
       setRootEntries([]); setExpandedFolders(new Set()); setChildEntries({}); setTabs([]); setActiveTabIndex(0);
@@ -169,6 +210,7 @@ export default function IdeRoute() {
             onCreateEntry={handleCreateEntry}
             onRenameEntry={handleRenameEntry}
             onDeleteEntry={handleDeleteEntry}
+            onMoveEntry={handleMoveEntry}
           />
         </div>
       </div>

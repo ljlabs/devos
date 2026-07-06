@@ -24,7 +24,7 @@ import { DatabaseSchema, Workspace, Thread, Message, AllowSimilarPattern } from 
 import { logInfo, logError, getLogs } from "../src/logger";
 import { SqliteDb } from "./db.sqlite";
 import * as git from "./git";
-import { listDirectory, readFile, writeFile, createEntry, renameEntry, deleteEntry } from "./files";
+import { listDirectory, readFile, writeFile, createEntry, renameEntry, deleteEntry, moveEntry } from "./files";
 import { initWebSocket, broadcastToThread, broadcastThreadUpdate, broadcastAck, type WsHandlers } from "./wsServer";
 
 dotenv.config();
@@ -662,6 +662,43 @@ app.post("/api/workspaces/:workspaceId/files/delete", (req, res) => {
     res.status(500).json({ error: e.message || "Internal server error" });
   }
 });
+
+/**
+ * Move a file or directory to a new parent directory
+ * POST /api/workspaces/:workspaceId/files/move
+ * Body: { sourcePath: string, destParentPath: string }
+ */
+app.post("/api/workspaces/:workspaceId/files/move", (req, res) => {
+  try {
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+    const { sourcePath, destParentPath } = req.body;
+
+    if (!sourcePath || typeof sourcePath !== "string") {
+      return res.status(400).json({ error: "sourcePath (string) required" });
+    }
+
+    // destParentPath can be empty string (means workspace root), but must be present and a string
+    if (destParentPath === undefined || destParentPath === null || typeof destParentPath !== "string") {
+      return res.status(400).json({ error: "destParentPath (string) required" });
+    }
+
+    const movedEntry = moveEntry(ws.path, sourcePath, destParentPath);
+    
+    logInfo("server", `Moved: ${sourcePath} → ${destParentPath}`, req.params.workspaceId);
+    res.json({ ok: true, entry: movedEntry });
+  } catch (e: any) {
+    if (e.message.includes("traversal")) {
+      return res.status(400).json({ error: e.message });
+    }
+    if (e.message.includes("Not found")) {
+      return res.status(404).json({ error: e.message });
+    }
+    res.status(500).json({ error: e.message || "Internal server error" });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Routes — Git
 // ---------------------------------------------------------------------------

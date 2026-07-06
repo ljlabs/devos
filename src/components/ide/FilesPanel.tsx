@@ -25,6 +25,7 @@ interface FilesPanelProps {
   onCreateEntry?: (parentPath: string, name: string, type: "file" | "directory") => Promise<void>;
   onRenameEntry?: (oldPath: string, newName: string) => Promise<void>;
   onDeleteEntry?: (path: string) => Promise<void>;
+  onMoveEntry?: (sourcePath: string, destParentPath: string) => Promise<void>;
 }
 
 export default function FilesPanel({
@@ -41,6 +42,7 @@ export default function FilesPanel({
   onCreateEntry,
   onRenameEntry,
   onDeleteEntry,
+  onMoveEntry,
 }: FilesPanelProps) {
   const [createMode, setCreateMode] = useState<"file" | "folder" | null>(null);
 
@@ -50,6 +52,8 @@ export default function FilesPanel({
     }
     setCreateMode(null);
   };
+
+  console.log(`[FilesPanel] rendered with onMoveEntry=${!!onMoveEntry}`);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -130,6 +134,7 @@ export default function FilesPanel({
               onCreateEntry={onCreateEntry}
               onRenameEntry={onRenameEntry}
               onDeleteEntry={onDeleteEntry}
+              onMoveEntry={onMoveEntry}
             />
           </div>
         )}

@@ -235,6 +235,50 @@ export default function WorkspaceIdeView({
     [workspaceId, fetchDirectory]
   );
 
+  const handleMoveEntry = useCallback(
+    async (sourcePath: string, destParentPath: string) => {
+      console.log(`[WorkspaceIdeView] handleMoveEntry called: ${sourcePath} → ${destParentPath}`);
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/files/move`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sourcePath, destParentPath }),
+        });
+        console.log(`[WorkspaceIdeView] move API response status: ${res.status}`);
+        if (res.ok) {
+          console.log(`[WorkspaceIdeView] move successful, refreshing directories`);
+          // Refresh source parent directory
+          const srcParentPath = sourcePath.substring(0, sourcePath.lastIndexOf("/"));
+          if (srcParentPath) {
+            console.log(`[WorkspaceIdeView] refreshing source parent: ${srcParentPath}`);
+            await fetchDirectory(srcParentPath);
+          } else {
+            console.log(`[WorkspaceIdeView] refreshing source root`);
+            await fetchDirectory();
+          }
+          // Refresh destination directory
+          console.log(`[WorkspaceIdeView] refreshing destination: ${destParentPath}`);
+          await fetchDirectory(destParentPath);
+          // Update open tab if the moved file was open
+          const fileName = sourcePath.substring(sourcePath.lastIndexOf("/") + 1);
+          const newPath = destParentPath ? `${destParentPath}/${fileName}` : fileName;
+          console.log(`[WorkspaceIdeView] updating tabs: ${sourcePath} → ${newPath}`);
+          setEditorTabs((prev) =>
+            prev.map((t) =>
+              t.path === sourcePath ? { ...t, path: newPath } : t
+            )
+          );
+        } else {
+          const error = await res.json();
+          console.error(`[WorkspaceIdeView] move failed: ${error.error}`);
+        }
+      } catch (e) {
+        console.error("Error moving entry:", e);
+      }
+    },
+    [workspaceId, fetchDirectory]
+  );
+
   const handleFileSelect = useCallback(
     (entry: FileEntry) => {
       if (entry.type === "file") {
@@ -322,6 +366,7 @@ export default function WorkspaceIdeView({
             onCreateEntry={handleCreateEntry}
             onRenameEntry={handleRenameEntry}
             onDeleteEntry={handleDeleteEntry}
+            onMoveEntry={handleMoveEntry}
           />
         )}
 
