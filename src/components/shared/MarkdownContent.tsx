@@ -8,6 +8,13 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ThinkingBlock } from "./ThinkingBlock";
 
+// Custom table component wrapper for horizontal scrolling
+const ScrollableTable: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="overflow-x-auto rounded-lg border border-white/5 scrollbar-subtle">
+    <table className="min-w-full">{children}</table>
+  </div>
+);
+
 export const MarkdownContent = React.memo(function MarkdownContent({ content }: { content: string }) {
   const segments = content.split(/(<thought>[\s\S]*?<\/thought>)/g);
 
@@ -23,7 +30,7 @@ export const MarkdownContent = React.memo(function MarkdownContent({ content }: 
       prose-li:text-slate-300
       prose-td:text-slate-300 prose-th:text-slate-200 prose-th:font-semibold
       prose-thead:border-b prose-thead:border-white/10
-      prose-table:border-collapse prose-td:border prose-td:border-white/5 prose-th:border prose-th:border-white/5 prose-table:overflow-x-auto
+      prose-table:w-full prose-table:border-collapse prose-td:border prose-td:border-white/5 prose-td:px-3 prose-td:py-2 prose-th:border prose-th:border-white/5 prose-th:px-3 prose-th:py-2
       prose-blockquote:border-emerald-500/30 prose-blockquote:text-slate-400 prose-blockquote:italic
       prose-hr:border-white/10
       prose-img:rounded-lg
@@ -33,7 +40,17 @@ export const MarkdownContent = React.memo(function MarkdownContent({ content }: 
           const thoughtContent = segment.slice(9, -10);
           return <ThinkingBlock key={i} content={thoughtContent} />;
         }
-        return <ReactMarkdown key={i} remarkPlugins={[remarkGfm]}>{segment}</ReactMarkdown>;
+        return (
+          <ReactMarkdown
+            key={i}
+            remarkPlugins={[remarkGfm]}
+            components={{
+              table: ({ children }) => <ScrollableTable>{children}</ScrollableTable>,
+            }}
+          >
+            {segment}
+          </ReactMarkdown>
+        );
       })}
     </div>
   );
