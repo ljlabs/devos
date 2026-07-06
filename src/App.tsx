@@ -257,12 +257,30 @@ function MessagesRoute() {
 
   const handleCreateThreadQuick = async () => {
     if (!activeWorkspaceId) return;
+    // Optimistic: add a temp thread to the sidebar so the user sees it appear instantly.
+    // We do NOT navigate yet — that avoids a 404 window where the server doesn't know
+    // about the temp thread id, which would cause WS subscribe + fetch failures.
+    const tempId = `thread-optimistic-${Date.now()}`;
+    const optimisticThread: Thread = { id: tempId, workspaceId: activeWorkspaceId, title: "Untitled", status: "idle" };
+    setThreads((prev) => [...prev, optimisticThread]);
+
     try {
       const res = await fetch(`/api/workspaces/${activeWorkspaceId}/threads`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "Untitled" }),
       });
-      if (res.ok) { const data = await res.json(); setThreads((prev) => [...prev, data]); navigate(`/messages/${activeWorkspaceId}/${data.id}`); }
-    } catch (e) { console.error(e); }
+      if (res.ok) {
+        const data = await res.json();
+        // Replace the optimistic thread with the real one and navigate
+        setThreads((prev) => prev.map((t) => t.id === tempId ? data : t));
+        navigate(`/messages/${activeWorkspaceId}/${data.id}`);
+      } else {
+        // Server failed — remove optimistic thread
+        setThreads((prev) => prev.filter((t) => t.id !== tempId));
+      }
+    } catch (e) {
+      setThreads((prev) => prev.filter((t) => t.id !== tempId));
+      console.error(e);
+    }
   };
 
   const handleRenameThread = async (tid: string, newTitle: string) => {

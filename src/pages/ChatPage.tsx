@@ -81,13 +81,10 @@ export default function ChatPage() {
       .then(ws => ws && setWorkspacePath(ws.path))
       .catch(console.error);
 
-    // Get thread info via threads list
-    fetch(`/api/workspaces/${workspaceId}/threads`)
-      .then(r => r.ok ? r.json() : [])
-      .then((threads: Thread[]) => {
-        const t = threads.find(t => t.id === threadId);
-        if (t) setThread(t);
-      })
+    // Get thread info via targeted endpoint (not all threads)
+    fetch(`/api/threads/${threadId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(t => t && setThread(t))
       .catch(console.error);
   }, [threadId, workspaceId]);
 

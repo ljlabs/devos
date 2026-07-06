@@ -64,7 +64,7 @@ export interface Message {
  * - "category": "python.exe *" - any python tool in that directory
  */
 export interface AllowSimilarPattern {
-  variant: "exact" | "tool" | "category" | "workspace"; // Which parts to match
+  variant: "exact" | "tool" | "category" | "workspace" | "wildcard" | "execute" | "write" | "edit" | "multiedit" | "read"; // Which parts to match
   pattern: string;  // The actual pattern (with * for wildcards)
   toolName?: string; // Optional: specific tool this applies to
   createdAt: string;

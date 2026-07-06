@@ -20,7 +20,7 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { ClaudeAgent } from "./claudeAgent";
-import { DatabaseSchema, Workspace, Thread, Message } from "../src/types";
+import { DatabaseSchema, Workspace, Thread, Message, AllowSimilarPattern } from "../src/types";
 import { logInfo, logError, getLogs } from "../src/logger";
 import { SqliteDb } from "./db.sqlite";
 import * as git from "./git";
@@ -58,23 +58,57 @@ const sqliteDb = new SqliteDb(DB_FILE);
 }
 
 // ---------------------------------------------------------------------------
-// DB helpers (wrapping SQLiteDb for consistency with existing code)
+// DB helpers
 // ---------------------------------------------------------------------------
 
 function readDb(): DatabaseSchema {
   return sqliteDb.readDb();
 }
 
+/** @deprecated Use targeted sqliteDb methods instead */
 function writeDb(data: DatabaseSchema): boolean {
   return sqliteDb.writeDb(data);
 }
 
+/** @deprecated Use targeted sqliteDb methods instead */
 function updateDb(fn: (db: DatabaseSchema) => void): void {
   sqliteDb.updateDb(fn);
 }
 
 function newId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/**
+ * Insert a message, update thread fields, and broadcast to WebSocket subscribers.
+ * Replaces the common updateDb + readDb + broadcast pattern.
+ */
+function insertAndBroadcast(threadId: string, msg: Message, threadUpdates: Partial<Thread>): Thread | null {
+  return sqliteDb.runInTransaction(() => {
+    sqliteDb.insertMessage(msg);
+    const thread = sqliteDb.updateThread(threadId, threadUpdates);
+    broadcastToThread(threadId, msg);
+    if (thread) broadcastThreadUpdate(threadId, thread);
+    return thread;
+  });
+}
+
+/**
+ * Insert a message without thread state changes, and broadcast.
+ */
+function insertMessageAndBroadcast(threadId: string, msg: Message): void {
+  sqliteDb.insertMessage(msg);
+  broadcastToThread(threadId, msg);
+}
+
+/**
+ * Get a thread and its messages in one query (for WebSocket subscribe).
+ */
+function getThreadWithMessages(threadId: string): { thread: Thread | undefined; messages: Message[] } {
+  return {
+    thread: sqliteDb.getThreadById(threadId),
+    messages: sqliteDb.getMessagesByThread(threadId),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +213,7 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
         raw.params?._meta?.claudeCode?.toolName ??
         toolNameFromKind(raw.params?.toolCall?.kind);
       
-      const patterns = readDb().allowedPatterns || [];
+      const patterns = sqliteDb.getAllowedPatterns();
 
       // Diagnostic logging
       logInfo("server", 
@@ -208,21 +242,13 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
           type: "permission_response",
           raw: { autoApproved: true, command: toolCommand, selected: { optionId: "allow" } },
         };
-        updateDb((db) => {
-          db.messages.push(autoApprovedMsg);
-          const t = db.threads.find((t) => t.id === threadId);
-          if (t) t.status = "thinking";
-        });
-
-        broadcastToThread(threadId, autoApprovedMsg);
-        const updatedThread = readDb().threads.find((t) => t.id === threadId);
-        if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
+        insertAndBroadcast(threadId, autoApprovedMsg, { status: "thinking" });
 
         return; // Do NOT fall through to the normal store-and-process path
       }
     }
 
-    // Create the message object outside updateDb so we can broadcast it after
+    // Create the message object
     const msg: Message = {
       id: newId("msg"),
       threadId,
@@ -231,115 +257,86 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
       type: raw.method ?? (raw.result !== undefined ? "response" : "unknown"),
     };
 
-    let accumulated = false;
+    // --- Streaming chunk accumulation ---
+    // When an agent_message_chunk arrives, append its text to the last
+    // message with the same messageId instead of creating a new record.
+    const chunkUpdate = raw.params?.update;
+    const isChunk = raw.method === "session/update"
+      && chunkUpdate?.sessionUpdate === "agent_message_chunk"
+      && chunkUpdate?.messageId;
 
-    updateDb((db) => {
-      // --- Streaming chunk accumulation ---
-      // When an agent_message_chunk arrives, append its text to the last
-      // message with the same messageId instead of creating a new record.
-      const chunkUpdate = raw.params?.update;
-      const isChunk = raw.method === "session/update"
-        && chunkUpdate?.sessionUpdate === "agent_message_chunk"
-        && chunkUpdate?.messageId;
+    if (isChunk) {
+      const messageId = chunkUpdate.messageId;
+      const newText = chunkUpdate.content?.text ?? "";
 
-      if (isChunk) {
-        const messageId = chunkUpdate.messageId;
-        const newText = chunkUpdate.content?.text ?? "";
-
-        // Find the last message for this thread with the same messageId
-        for (let i = db.messages.length - 1; i >= 0; i--) {
-          const existing = db.messages[i];
-          if (existing.threadId !== threadId) continue;
-          if (existing.raw?.params?.update?.messageId !== messageId) continue;
-
-          // Append the new text chunk
-          const existingUpdate = existing.raw.params.update;
-          if (existingUpdate.content && typeof existingUpdate.content === "object") {
-            existingUpdate.content.text = (existingUpdate.content.text || "") + newText;
-          }
-          existing.timestamp = msg.timestamp;
-          accumulated = true;
-          // Broadcast the accumulated message so streaming UI updates
-          broadcastToThread(threadId, existing);
-          return;
+      const existing = sqliteDb.getMessageByThreadAndMessageId(threadId, messageId);
+      if (existing) {
+        // Append the new text chunk
+        const updatedRaw = JSON.parse(JSON.stringify(existing.raw)); // deep clone
+        const existingUpdate = updatedRaw.params?.update;
+        if (existingUpdate?.content && typeof existingUpdate.content === "object") {
+          existingUpdate.content.text = (existingUpdate.content.text || "") + newText;
         }
-        // No existing message with this messageId — fall through to create one
+        sqliteDb.updateMessageRaw(existing.id, updatedRaw);
+        existing.raw = updatedRaw;
+        existing.timestamp = msg.timestamp;
+        broadcastToThread(threadId, existing);
+        return; // Early return — no thread state changes for chunks
       }
+      // No existing message with this messageId — fall through to create one
+    }
 
-      // Store the raw ACP message verbatim
-      db.messages.push(msg);
+    // Store the raw ACP message verbatim + update thread state
+    const threadUpdates: Partial<Thread> = {};
 
-      const thread = db.threads.find((t) => t.id === threadId);
-      if (!thread) return;
+    // Keep thread.sessionId updated if ACP tells us
+    const sessionId =
+      raw.params?.sessionId ??
+      raw.result?.sessionId ??
+      raw.params?.update?.sessionId;
+    if (sessionId) threadUpdates.sessionId = sessionId;
 
-      // Keep thread.sessionId updated if ACP tells us
-      const sessionId =
-        raw.params?.sessionId ??
-        raw.result?.sessionId ??
-        raw.params?.update?.sessionId;
-      if (sessionId) thread.sessionId = sessionId;
-
-      // --- State transitions ---
-
-      // JSON-RPC response with stopReason → agent turn is done
-      if ("id" in raw && raw.result?.stopReason) {
-        const reason = raw.result.stopReason;
-        logInfo("server", `stopReason=${reason} received, setting idle`, threadId);
-        thread.status = "idle";
-        if (reason !== "end_turn") {
-          thread.lastError = reason;
-        } else {
-          thread.lastError = undefined;
-        }
-        return;
+    // --- State transitions ---
+    if ("id" in raw && raw.result?.stopReason) {
+      const reason = raw.result.stopReason;
+      logInfo("server", `stopReason=${reason} received, setting idle`, threadId);
+      threadUpdates.status = "idle";
+      threadUpdates.lastError = reason !== "end_turn" ? reason : undefined;
+    } else if ("id" in raw && raw.error) {
+      logInfo("server", `RPC error received: ${JSON.stringify(raw.error)}, setting idle`, threadId);
+      threadUpdates.status = "idle";
+      threadUpdates.lastError = raw.error.message ?? "Unknown error";
+    } else if (raw.method === "session/request_permission") {
+      logInfo("server", `[PERMISSION REQUIRED] No pattern match for tool, awaiting user input`, threadId);
+      threadUpdates.status = "awaiting_permission";
+      threadUpdates.pendingPermissionId = raw.id;
+      threadUpdates.pendingPermissionOptions = raw.params?.options ?? [];
+    } else if (raw.method === "session/update") {
+      const update = raw.params?.update;
+      if (update?.sessionUpdate === "session_info_update" && update?.title) {
+        threadUpdates.title = update.title;
       }
+    }
 
-      // JSON-RPC error response → agent turn failed
-      if ("id" in raw && raw.error) {
-        logInfo("server", `RPC error received: ${JSON.stringify(raw.error)}, setting idle`, threadId);
-        thread.status = "idle";
-        thread.lastError = raw.error.message ?? "Unknown error";
-        return;
-      }
-
-      // Agent requests permission — no pattern matched, prompt the user
-      if (raw.method === "session/request_permission") {
-        logInfo("server", `[PERMISSION REQUIRED] No pattern match for tool, awaiting user input`, threadId);
-        thread.status = "awaiting_permission";
-        thread.pendingPermissionId = raw.id;
-        thread.pendingPermissionOptions = raw.params?.options ?? [];
-        return;
-      }
-
-      // Agent sends a session/update → it's still working, just notify progress.
-      if (raw.method === "session/update") {
-        const update = raw.params?.update;
-        if (update?.sessionUpdate === "session_info_update" && update?.title) {
-          thread.title = update.title;
-        }
-        return;
+    // Atomic insert + update
+    sqliteDb.runInTransaction(() => {
+      sqliteDb.insertMessage(msg);
+      if (Object.keys(threadUpdates).length > 0) {
+        sqliteDb.updateThread(threadId, threadUpdates);
       }
     });
 
-    // Broadcast to WebSocket subscribers after DB write
-    // (skip if already broadcast during chunk accumulation)
-    if (!accumulated) {
-      broadcastToThread(threadId, msg);
-    }
-    const updatedThread = readDb().threads.find((t) => t.id === threadId);
+    broadcastToThread(threadId, msg);
+    const updatedThread = sqliteDb.getThreadById(threadId);
     if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
   });
 
   agent.on("close", () => {
-    updateDb((db) => {
-      const t = db.threads.find((t) => t.id === threadId);
-      if (t) {
-        t.status = "idle";
-        t.pendingPermissionId = undefined;
-        t.pendingPermissionOptions = undefined;
-      }
+    const updatedThread = sqliteDb.updateThread(threadId, {
+      status: "idle",
+      pendingPermissionId: undefined,
+      pendingPermissionOptions: undefined,
     });
-    const updatedThread = readDb().threads.find((t) => t.id === threadId);
     if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
   });
 }
@@ -349,30 +346,22 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
 // ---------------------------------------------------------------------------
 
 app.get("/api/workspaces", (_req, res) => {
-  const db = readDb();
-  
-  // Validate all workspace paths and filter out invalid ones
-  const validWorkspaces = db.workspaces.filter((ws) => {
+  const allWorkspaces = readDb().workspaces;
+
+  // Validate all workspace paths and remove invalid ones
+  const invalidIds: string[] = [];
+  const validWorkspaces = allWorkspaces.filter((ws) => {
     if (!fs.existsSync(ws.path)) {
       logError("server", `Workspace path does not exist: ${ws.path}`, "global");
+      invalidIds.push(ws.id);
       return false;
     }
     return true;
   });
 
-  // If any were removed, update the DB
-  if (validWorkspaces.length !== db.workspaces.length) {
-    const removedIds = db.workspaces
-      .filter((ws) => !validWorkspaces.includes(ws))
-      .map((ws) => ws.id);
-    
-    updateDb((db) => {
-      db.workspaces = validWorkspaces;
-      // Also clean up threads and messages for removed workspaces
-      db.threads = db.threads.filter((t) => !removedIds.includes(t.workspaceId));
-      db.messages = db.messages.filter((m) => !removedIds.includes(m.threadId) && 
-        !db.threads.some((t) => removedIds.includes(t.workspaceId) && t.id === m.threadId));
-    });
+  // Cascade delete invalid workspaces (threads + messages deleted by FK)
+  for (const id of invalidIds) {
+    sqliteDb.deleteWorkspace(id);
   }
 
   // Ensure sandboxed workspaces exist
@@ -385,9 +374,14 @@ app.get("/api/workspaces", (_req, res) => {
   res.json(validWorkspaces);
 });
 
+app.get("/api/workspaces/:workspaceId", (req, res) => {
+  const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
+  if (!ws) return res.status(404).json({ error: "not found" });
+  res.json(ws);
+});
+
 app.get("/api/allowedPatterns", (_req, res) => {
-  const db = readDb();
-  res.json(db.allowedPatterns);
+  res.json(sqliteDb.getAllowedPatterns());
 });
 
 app.post("/api/allowedPatterns", (req, res) => {
@@ -395,38 +389,27 @@ app.post("/api/allowedPatterns", (req, res) => {
   if (!pattern || typeof pattern !== "string") {
     return res.status(400).json({ error: "pattern (string) required" });
   }
-  let patterns: any[] = [];
-  updateDb((db) => {
-    db.allowedPatterns = db.allowedPatterns || [];
-    const exists = (db.allowedPatterns as any[]).some(
-      (p: any) => (p.pattern || p) === pattern && p.toolName === (toolName ?? undefined)
-    );
-    if (!exists) {
-      (db.allowedPatterns as any[]).push({
-        pattern,
-        variant: variant ?? (pattern.endsWith("*") ? "wildcard" : "exact"),
-        toolName: toolName ?? undefined,
-        createdAt: new Date().toISOString(),
-      });
-      logInfo("server", `Pattern saved via API (tool=${toolName ?? "any"}): ${pattern}`, "global");
-    }
-    patterns = db.allowedPatterns;
-  });
-  res.status(201).json(patterns);
+  const existing = sqliteDb.getAllowedPatterns();
+  const exists = existing.some(
+    (p) => (p.pattern || (p as any)) === pattern && p.toolName === (toolName ?? undefined)
+  );
+  if (!exists) {
+    sqliteDb.insertAllowedPattern({
+      pattern,
+      variant: variant ?? (pattern.endsWith("*") ? "wildcard" : "exact"),
+      toolName: toolName ?? undefined,
+      createdAt: new Date().toISOString(),
+    });
+    logInfo("server", `Pattern saved via API (tool=${toolName ?? "any"}): ${pattern}`, "global");
+  }
+  res.status(201).json(sqliteDb.getAllowedPatterns());
 });
 
 app.delete("/api/allowedPatterns", (req, res) => {
   const { pattern } = req.body;
   if (!pattern) return res.status(400).json({ error: "pattern required" });
-  let patterns: any[] = [];
-  updateDb((db) => {
-    db.allowedPatterns = db.allowedPatterns || [];
-    db.allowedPatterns = (db.allowedPatterns as any[]).filter(
-      (p: any) => (p.pattern || p) !== pattern
-    ) as any;
-    patterns = db.allowedPatterns;
-  });
-  res.json(patterns);
+  sqliteDb.deleteAllowedPattern(pattern);
+  res.json(sqliteDb.getAllowedPatterns());
 });
 
 app.post("/api/workspaces", (req, res) => {
@@ -461,7 +444,7 @@ app.post("/api/workspaces", (req, res) => {
   const id = `ws-${Date.now()}`;
   const workspace: Workspace = { id, name, path: wsPath };
 
-  updateDb((db) => db.workspaces.push(workspace));
+  sqliteDb.insertWorkspace(workspace);
   res.status(201).json(workspace);
 });
 
@@ -470,12 +453,14 @@ app.patch("/api/workspaces/:workspaceId", (req, res) => {
   if (wsPath !== undefined) {
     return res.status(400).json({ error: "workspace path cannot be changed" });
   }
-  const db = readDb();
-  const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+  const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
   if (!ws) return res.status(404).json({ error: "not found" });
-  if (name) ws.name = name;
-  writeDb(db);
-  res.json(ws);
+  if (name) {
+    const updated = sqliteDb.updateWorkspaceName(ws.id, name);
+    res.json(updated);
+  } else {
+    res.json(ws);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -488,8 +473,7 @@ app.patch("/api/workspaces/:workspaceId", (req, res) => {
  */
 app.get("/api/workspaces/:workspaceId/files", (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const relativePath = (req.query.path as string) || undefined;
@@ -516,8 +500,7 @@ app.get("/api/workspaces/:workspaceId/files", (req, res) => {
  */
 app.get("/api/workspaces/:workspaceId/files/read", (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const relativePath = req.query.path as string;
@@ -545,8 +528,7 @@ app.get("/api/workspaces/:workspaceId/files/read", (req, res) => {
  */
 app.put("/api/workspaces/:workspaceId/files/write", (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const { path: relativePath, content } = req.body;
@@ -577,8 +559,7 @@ app.put("/api/workspaces/:workspaceId/files/write", (req, res) => {
  */
 app.post("/api/workspaces/:workspaceId/files/create", (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const { path: relativePath, type } = req.body;
@@ -612,8 +593,7 @@ app.post("/api/workspaces/:workspaceId/files/create", (req, res) => {
  */
 app.post("/api/workspaces/:workspaceId/files/rename", (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const { oldPath, newName } = req.body;
@@ -650,8 +630,7 @@ app.post("/api/workspaces/:workspaceId/files/rename", (req, res) => {
  */
 app.post("/api/workspaces/:workspaceId/files/delete", (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const { path: relativePath } = req.body;
@@ -683,8 +662,7 @@ app.post("/api/workspaces/:workspaceId/files/delete", (req, res) => {
  */
 app.get("/api/workspaces/:workspaceId/git/info", async (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const gitInfo = await git.getGitInfo(ws.path);
@@ -700,8 +678,7 @@ app.get("/api/workspaces/:workspaceId/git/info", async (req, res) => {
  */
 app.get("/api/workspaces/:workspaceId/git/branches", async (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const branches = await git.listBranches(ws.path);
@@ -718,8 +695,7 @@ app.get("/api/workspaces/:workspaceId/git/branches", async (req, res) => {
  */
 app.post("/api/workspaces/:workspaceId/git/switch-branch", async (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const { branchName } = req.body;
@@ -740,8 +716,7 @@ app.post("/api/workspaces/:workspaceId/git/switch-branch", async (req, res) => {
  */
 app.post("/api/workspaces/:workspaceId/git/stash", async (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const { message } = req.body;
@@ -759,8 +734,7 @@ app.post("/api/workspaces/:workspaceId/git/stash", async (req, res) => {
  */
 app.get("/api/workspaces/:workspaceId/git/stashes", async (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const stashes = await git.listStashes(ws.path);
@@ -777,8 +751,7 @@ app.get("/api/workspaces/:workspaceId/git/stashes", async (req, res) => {
  */
 app.post("/api/workspaces/:workspaceId/git/stash/apply", async (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const { stashId } = req.body;
@@ -799,8 +772,7 @@ app.post("/api/workspaces/:workspaceId/git/stash/apply", async (req, res) => {
  */
 app.post("/api/workspaces/:workspaceId/git/stash/pop", async (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const { stashId } = req.body;
@@ -820,8 +792,7 @@ app.post("/api/workspaces/:workspaceId/git/stash/pop", async (req, res) => {
  */
 app.delete("/api/workspaces/:workspaceId/git/stash/:stashId", async (req, res) => {
   try {
-    const db = readDb();
-    const ws = db.workspaces.find((w) => w.id === req.params.workspaceId);
+    const ws = sqliteDb.getWorkspaceById(req.params.workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
     const { stashId } = req.params;
@@ -838,8 +809,7 @@ app.delete("/api/workspaces/:workspaceId/git/stash/:stashId", async (req, res) =
 // ---------------------------------------------------------------------------
 
 app.get("/api/workspaces/:workspaceId/threads", (req, res) => {
-  const db = readDb();
-  res.json(db.threads.filter((t) => t.workspaceId === req.params.workspaceId));
+  res.json(sqliteDb.getThreadsByWorkspace(req.params.workspaceId));
 });
 
 app.post("/api/workspaces/:workspaceId/threads", (req, res) => {
@@ -853,13 +823,12 @@ app.post("/api/workspaces/:workspaceId/threads", (req, res) => {
     title: title || "Untitled", // placeholder until ACP sets it
     status: "idle",
   };
-  updateDb((db) => db.threads.push(thread));
+  sqliteDb.insertThread(thread);
   res.status(201).json(thread);
 });
 
 app.get("/api/threads/:threadId", (req, res) => {
-  const db = readDb();
-  const thread = db.threads.find((t) => t.id === req.params.threadId);
+  const thread = sqliteDb.getThreadById(req.params.threadId);
   if (!thread) return res.status(404).json({ error: "not found" });
   res.json(thread);
 });
@@ -867,22 +836,18 @@ app.get("/api/threads/:threadId", (req, res) => {
 app.patch("/api/threads/:threadId", (req, res) => {
   const { title } = req.body;
   if (!title) return res.status(400).json({ error: "title required" });
-  const db = readDb();
-  const thread = db.threads.find((t) => t.id === req.params.threadId);
-  if (!thread) return res.status(404).json({ error: "not found" });
-  thread.title = title;
-  writeDb(db);
-  res.json(thread);
+  const updated = sqliteDb.updateThread(req.params.threadId, { title });
+  if (!updated) return res.status(404).json({ error: "not found" });
+  res.json(updated);
 });
 
 app.delete("/api/threads/:threadId", (req, res) => {
   const { threadId } = req.params;
-  const db = readDb();
-  const thread = db.threads.find((t) => t.id === threadId);
+  const thread = sqliteDb.getThreadById(threadId);
   if (!thread) return res.status(404).json({ error: "not found" });
 
   ClaudeAgent.removeInstance(threadId);
-  
+
   // Use cascade delete from SQLiteDb
   const deleted = sqliteDb.deleteThread(threadId);
   if (!deleted) return res.status(500).json({ error: "delete failed" });
@@ -892,11 +857,10 @@ app.delete("/api/threads/:threadId", (req, res) => {
 
 app.delete("/api/workspaces/:workspaceId", (req, res) => {
   const { workspaceId } = req.params;
-  const db = readDb();
-  const wsIndex = db.workspaces.findIndex((w) => w.id === workspaceId);
-  if (wsIndex === -1) return res.status(404).json({ error: "not found" });
+  const ws = sqliteDb.getWorkspaceById(workspaceId);
+  if (!ws) return res.status(404).json({ error: "not found" });
 
-  const threadIds = db.threads.filter((t) => t.workspaceId === workspaceId).map((t) => t.id);
+  const threadIds = sqliteDb.getThreadsByWorkspace(workspaceId).map((t) => t.id);
   threadIds.forEach((id) => ClaudeAgent.removeInstance(id));
 
   // Use cascade delete from SQLiteDb (deletes workspace + threads + messages)
@@ -911,8 +875,7 @@ app.delete("/api/workspaces/:workspaceId", (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get("/api/threads/:threadId/messages", (req, res) => {
-  const db = readDb();
-  res.json(db.messages.filter((m) => m.threadId === req.params.threadId));
+  res.json(sqliteDb.getMessagesByThread(req.params.threadId));
 });
 
 /**
@@ -949,12 +912,11 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
   const { text } = req.body;
   if (!text || !text.trim()) return res.status(400).json({ error: "text required" });
 
-  const db = readDb();
-  const thread = db.threads.find((t) => t.id === threadId);
+  const thread = sqliteDb.getThreadById(threadId);
   if (!thread) return res.status(404).json({ error: "thread not found" });
 
   // Look up the workspace to get its path
-  const workspace = db.workspaces.find((ws) => ws.id === thread.workspaceId);
+  const workspace = sqliteDb.getWorkspaceById(thread.workspaceId);
   if (!workspace) {
     return res.status(404).json({ error: "workspace not found" });
   }
@@ -963,7 +925,7 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
 
   // Validate that the workspace path exists before proceeding
   if (!fs.existsSync(wsPath)) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       error: `Workspace path no longer exists: ${wsPath}`,
       details: "The workspace directory has been deleted or is no longer accessible. Please delete this workspace and create a new one."
     });
@@ -977,19 +939,7 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
     raw: { role: "user", content: text },
     type: "user_message",
   };
-  updateDb((db) => {
-    db.messages.push(userMsg);
-    const t = db.threads.find((t) => t.id === threadId);
-    if (t) {
-      t.status = "thinking";
-      t.lastError = undefined;
-    }
-  });
-
-  // Broadcast to WebSocket subscribers
-  broadcastToThread(threadId, userMsg);
-  const updatedThread = readDb().threads.find((t) => t.id === threadId);
-  if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
+  insertAndBroadcast(threadId, userMsg, { status: "thinking", lastError: undefined });
 
   res.json(userMsg);
 
@@ -1006,19 +956,14 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
       const isResumingSession = thread.sessionId === sessionId && thread.sessionId !== undefined;
 
       // Persist sessionId if it's new
-      updateDb((db) => {
-        const t = db.threads.find((t) => t.id === threadId);
-        if (t) {
-          if (!t.sessionId) {
-            t.sessionId = sessionId;
-          }
-          if (isResumingSession) {
-            console.log(`[server] Resumed existing session ${sessionId} for thread ${threadId}`);
-          } else {
-            console.log(`[server] Created new session ${sessionId} for thread ${threadId}`);
-          }
-        }
-      });
+      if (!thread.sessionId) {
+        sqliteDb.updateThread(threadId, { sessionId });
+      }
+      if (isResumingSession) {
+        console.log(`[server] Resumed existing session ${sessionId} for thread ${threadId}`);
+      } else {
+        console.log(`[server] Created new session ${sessionId} for thread ${threadId}`);
+      }
 
       // Check if cancel arrived while we were inside initialize() (e.g. waiting
       // for session/new to return). The session now exists so we can cancel it
@@ -1028,21 +973,13 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
         agent.markSessionReady(); // clear replay suppression before cancelling
         logInfo("server", `cancel was pending after initialize, aborting turn and cancelling sessionId=${sessionId}`, threadId);
         agent.cancel(sessionId);
-        updateDb((db) => {
-          const t = db.threads.find((t) => t.id === threadId);
-          if (t) {
-            t.status = "idle";
-            t.pendingPermissionId = undefined;
-            t.pendingPermissionOptions = undefined;
-          }
-          db.messages.push({
-            id: newId("msg-cancel"),
-            threadId,
-            timestamp: new Date().toISOString(),
-            type: "system",
-            raw: { text: "Agent turn cancelled by user" },
-          });
-        });
+        insertAndBroadcast(threadId, {
+          id: newId("msg-cancel"),
+          threadId,
+          timestamp: new Date().toISOString(),
+          type: "system",
+          raw: { text: "Agent turn cancelled by user" },
+        }, { status: "idle", pendingPermissionId: undefined, pendingPermissionOptions: undefined });
         return;
       }
 
@@ -1059,22 +996,15 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
       logInfo("server", `session/prompt completed`, threadId);
 
       // Agent turn is done → set idle
-      updateDb((db) => {
-        const t = db.threads.find((t) => t.id === threadId);
-        if (t) t.status = "idle";
-      });
+      sqliteDb.updateThreadStatus(threadId, "idle");
     } catch (err: any) {
-      updateDb((db) => {
-        db.messages.push({
-          id: newId("msg-err"),
-          threadId,
-          timestamp: new Date().toISOString(),
-          raw: { error: err.message },
-          type: "error",
-        });
-        const t = db.threads.find((t) => t.id === threadId);
-        if (t) t.status = "idle";
-      });
+      insertAndBroadcast(threadId, {
+        id: newId("msg-err"),
+        threadId,
+        timestamp: new Date().toISOString(),
+        raw: { error: err.message },
+        type: "error",
+      }, { status: "idle" });
     }
   })();
 });
@@ -1275,8 +1205,7 @@ app.post("/api/threads/:threadId/respond", async (req, res) => {
     return res.status(400).json({ error: "allow_similar is a UI concept — save the pattern via POST /api/allowedPatterns, then send the ACP option (allow_once / allow_always)" });
   }
 
-  const db = readDb();
-  const thread = db.threads.find((t) => t.id === threadId);
+  const thread = sqliteDb.getThreadById(threadId);
   if (!thread) return res.status(404).json({ error: "thread not found" });
   if (thread.pendingPermissionId === undefined) {
     return res.status(400).json({ error: "no pending permission" });
@@ -1285,29 +1214,26 @@ app.post("/api/threads/:threadId/respond", async (req, res) => {
   // If user selected "allow_always", save the exact tool command as a pattern
   // scoped to the specific tool so Bash patterns don't auto-approve Write ops.
   if (optionId === "allow_always" && toolCommand) {
-    updateDb((db) => {
-      db.allowedPatterns = db.allowedPatterns || [];
-      const exists = (db.allowedPatterns as any[]).some(
-        (p: any) => (p.pattern || p) === toolCommand && p.toolName === (toolName ?? undefined)
-      );
-      if (!exists) {
-        // Derive variant from toolName: Write/Edit/Read tools → their kind, Bash → "execute", etc.
-        const kind = toolName
-          ? (["Write", "Edit", "MultiEdit", "Read"].includes(toolName) ? toolName.toLowerCase() : "execute")
-          : "exact";
-        (db.allowedPatterns as any[]).push({
-          pattern: toolCommand,
-          variant: kind,
-          toolName: toolName ?? undefined,
-          createdAt: new Date().toISOString(),
-        });
-        logInfo("server", `Pattern saved (exact, tool=${toolName ?? "any"}): ${toolCommand}`, threadId);
-      }
-    });
+    const existing = sqliteDb.getAllowedPatterns();
+    const exists = existing.some(
+      (p) => (p.pattern || (p as any)) === toolCommand && p.toolName === (toolName ?? undefined)
+    );
+    if (!exists) {
+      const kind = toolName
+        ? (["Write", "Edit", "MultiEdit", "Read"].includes(toolName) ? toolName.toLowerCase() : "execute")
+        : "exact";
+      sqliteDb.insertAllowedPattern({
+        pattern: toolCommand,
+        variant: kind as AllowSimilarPattern["variant"],
+        toolName: toolName ?? undefined,
+        createdAt: new Date().toISOString(),
+      });
+      logInfo("server", `Pattern saved (exact, tool=${toolName ?? "any"}): ${toolCommand}`, threadId);
+    }
   }
 
   // Look up the workspace to get its path
-  const workspace = db.workspaces.find((ws) => ws.id === thread.workspaceId);
+  const workspace = sqliteDb.getWorkspaceById(thread.workspaceId);
   const wsPath = workspace?.path || thread.workspaceId;
   const agent = ClaudeAgent.getInstance(threadId, wsPath);
   wireAgent(agent, threadId);
@@ -1319,28 +1245,17 @@ app.post("/api/threads/:threadId/respond", async (req, res) => {
     result: { outcome: { outcome: "selected", optionId } },
   });
 
-  const permResponseMsg: Message = {
+  insertAndBroadcast(threadId, {
     id: newId("msg-perm"),
     threadId,
     timestamp: new Date().toISOString(),
     type: "permission_response",
     raw: { selected: { optionId } },
-  };
-
-  updateDb((db) => {
-    const t = db.threads.find((t) => t.id === threadId);
-    if (t) {
-      t.status = "thinking";
-      t.pendingPermissionId = undefined;
-      t.pendingPermissionOptions = undefined;
-    }
-    db.messages.push(permResponseMsg);
+  }, {
+    status: "thinking",
+    pendingPermissionId: undefined,
+    pendingPermissionOptions: undefined,
   });
-
-  // Broadcast the permission response message + thread status to WebSocket subscribers
-  broadcastToThread(threadId, permResponseMsg);
-  const updatedThread = readDb().threads.find((t) => t.id === threadId);
-  if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
 
   res.json({ ok: true });
 });
@@ -1358,8 +1273,7 @@ app.post("/api/threads/:threadId/acp", async (req, res) => {
     return res.status(400).json({ error: "valid JSON-RPC object required" });
   }
   const { threadId } = req.params;
-  const db = readDb();
-  const thread = db.threads.find((t) => t.id === threadId);
+  const thread = sqliteDb.getThreadById(threadId);
   if (!thread) return res.status(404).json({ error: "thread not found" });
 
   const agent = ClaudeAgent.getInstance(
@@ -1383,21 +1297,17 @@ app.post("/api/threads/:threadId/cancel", async (req, res) => {
   // initialize()) will see it and abort before sending session/prompt.
   cancelPending.add(threadId);
 
-  const db = readDb();
-  const thread = db.threads.find((t) => t.id === threadId);
+  const thread = sqliteDb.getThreadById(threadId);
   if (!thread) return res.status(404).json({ error: "thread not found" });
 
   // If there's no active session, the async handler will catch cancelPending
   // when initialize() finishes. Mark idle and return — nothing else to do yet.
   if (!thread.sessionId) {
-    updateDb((db) => {
-      const t = db.threads.find((t) => t.id === threadId);
-      if (t) t.status = "idle";
-    });
+    sqliteDb.updateThreadStatus(threadId, "idle");
     return res.json({ ok: true });
   }
 
-  const workspace = db.workspaces.find((ws) => ws.id === thread.workspaceId);
+  const workspace = sqliteDb.getWorkspaceById(thread.workspaceId);
   const wsPath = workspace?.path || thread.workspaceId;
 
   // The agent process is already running (it's mid-turn), so send cancel
@@ -1413,19 +1323,15 @@ app.post("/api/threads/:threadId/cancel", async (req, res) => {
       result: { outcome: { outcome: "cancelled" } },
     });
 
-    updateDb((db) => {
-      const t = db.threads.find((t) => t.id === threadId);
-      if (t) {
-        t.pendingPermissionId = undefined;
-        t.pendingPermissionOptions = undefined;
-      }
-      db.messages.push({
-        id: newId("msg-cancel-perm"),
-        threadId,
-        timestamp: new Date().toISOString(),
-        type: "permission_response",
-        raw: { selected: { optionId: "deny" } },
-      });
+    insertAndBroadcast(threadId, {
+      id: newId("msg-cancel-perm"),
+      threadId,
+      timestamp: new Date().toISOString(),
+      type: "permission_response",
+      raw: { selected: { optionId: "deny" } },
+    }, {
+      pendingPermissionId: undefined,
+      pendingPermissionOptions: undefined,
     });
   }
 
@@ -1434,25 +1340,17 @@ app.post("/api/threads/:threadId/cancel", async (req, res) => {
   cancelPending.delete(threadId);
   agent.cancel(thread.sessionId);
 
-  updateDb((db) => {
-    const t = db.threads.find((t) => t.id === threadId);
-    if (t) {
-      t.status = "idle";
-      t.pendingPermissionId = undefined;
-      t.pendingPermissionOptions = undefined;
-    }
-    db.messages.push({
-      id: newId("msg-cancel"),
-      threadId,
-      timestamp: new Date().toISOString(),
-      type: "system",
-      raw: { text: "Agent turn cancelled by user" },
-    });
+  insertAndBroadcast(threadId, {
+    id: newId("msg-cancel"),
+    threadId,
+    timestamp: new Date().toISOString(),
+    type: "system",
+    raw: { text: "Agent turn cancelled by user" },
+  }, {
+    status: "idle",
+    pendingPermissionId: undefined,
+    pendingPermissionOptions: undefined,
   });
-
-  // Broadcast to WebSocket subscribers
-  const updatedThread = readDb().threads.find((t) => t.id === threadId);
-  if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
 
   res.json({ ok: true });
 });
@@ -1535,14 +1433,13 @@ function broadcastGlobalLog(event: any) {
 
 const wsHandlers: WsHandlers = {
   sendMessage: (threadId, text, clientMsgId, ws) => {
-    const db = readDb();
-    const thread = db.threads.find((t) => t.id === threadId);
+    const thread = sqliteDb.getThreadById(threadId);
     if (!thread) {
       ws.send(JSON.stringify({ type: "error", message: "thread not found", clientMsgId }));
       return;
     }
 
-    const workspace = db.workspaces.find((w) => w.id === thread.workspaceId);
+    const workspace = sqliteDb.getWorkspaceById(thread.workspaceId);
     if (!workspace) {
       ws.send(JSON.stringify({ type: "error", message: "workspace not found", clientMsgId }));
       return;
@@ -1561,13 +1458,11 @@ const wsHandlers: WsHandlers = {
       raw: { role: "user", content: text },
       type: "user_message",
     };
-    updateDb((db) => {
-      db.messages.push(userMsg);
-      const t = db.threads.find((t) => t.id === threadId);
-      if (t) {
-        t.status = "thinking";
-        t.lastError = undefined;
-      }
+
+    // Insert message + update thread atomically
+    sqliteDb.runInTransaction(() => {
+      sqliteDb.insertMessage(userMsg);
+      sqliteDb.updateThread(threadId, { status: "thinking", lastError: undefined });
     });
 
     // Ack the client that sent the message, and broadcast to ALL subscribers
@@ -1585,40 +1480,27 @@ const wsHandlers: WsHandlers = {
         const sessionId = await agent.initialize(thread.sessionId);
         const isResumingSession = thread.sessionId === sessionId && thread.sessionId !== undefined;
 
-        updateDb((db) => {
-          const t = db.threads.find((t) => t.id === threadId);
-          if (t) {
-            if (!t.sessionId) {
-              t.sessionId = sessionId;
-            }
-            if (isResumingSession) {
-              console.log(`[server] Resumed existing session ${sessionId} for thread ${threadId}`);
-            } else {
-              console.log(`[server] Created new session ${sessionId} for thread ${threadId}`);
-            }
-          }
-        });
+        if (!thread.sessionId) {
+          sqliteDb.updateThread(threadId, { sessionId });
+        }
+        if (isResumingSession) {
+          console.log(`[server] Resumed existing session ${sessionId} for thread ${threadId}`);
+        } else {
+          console.log(`[server] Created new session ${sessionId} for thread ${threadId}`);
+        }
 
         if (cancelPending.has(threadId)) {
           cancelPending.delete(threadId);
           agent.markSessionReady();
           logInfo("server", `cancel was pending after initialize, aborting turn`, threadId);
           agent.cancel(sessionId);
-          updateDb((db) => {
-            const t = db.threads.find((t) => t.id === threadId);
-            if (t) {
-              t.status = "idle";
-              t.pendingPermissionId = undefined;
-              t.pendingPermissionOptions = undefined;
-            }
-            db.messages.push({
-              id: newId("msg-cancel"),
-              threadId,
-              timestamp: new Date().toISOString(),
-              type: "system",
-              raw: { text: "Agent turn cancelled by user" },
-            });
-          });
+          insertAndBroadcast(threadId, {
+            id: newId("msg-cancel"),
+            threadId,
+            timestamp: new Date().toISOString(),
+            type: "system",
+            raw: { text: "Agent turn cancelled by user" },
+          }, { status: "idle", pendingPermissionId: undefined, pendingPermissionOptions: undefined });
           return;
         }
 
@@ -1630,26 +1512,16 @@ const wsHandlers: WsHandlers = {
         });
         logInfo("server", `session/prompt completed`, threadId);
 
-        updateDb((db) => {
-          const t = db.threads.find((t) => t.id === threadId);
-          if (t) t.status = "idle";
-        });
-        const updatedThread = readDb().threads.find((t) => t.id === threadId);
+        const updatedThread = sqliteDb.updateThreadStatus(threadId, "idle");
         if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
       } catch (err: any) {
-        updateDb((db) => {
-          db.messages.push({
-            id: newId("msg-err"),
-            threadId,
-            timestamp: new Date().toISOString(),
-            raw: { error: err.message },
-            type: "error",
-          });
-          const t = db.threads.find((t) => t.id === threadId);
-          if (t) t.status = "idle";
-        });
-        const updatedThread = readDb().threads.find((t) => t.id === threadId);
-        if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
+        const updatedThread = insertAndBroadcast(threadId, {
+          id: newId("msg-err"),
+          threadId,
+          timestamp: new Date().toISOString(),
+          raw: { error: err.message },
+          type: "error",
+        }, { status: "idle" });
       }
     })();
   },
@@ -1657,31 +1529,28 @@ const wsHandlers: WsHandlers = {
   respond: (threadId, optionId, toolCommand, toolName) => {
     if (optionId === "allow_similar") return;
 
-    const db = readDb();
-    const thread = db.threads.find((t) => t.id === threadId);
+    const thread = sqliteDb.getThreadById(threadId);
     if (!thread || thread.pendingPermissionId === undefined) return;
 
     if (optionId === "allow_always" && toolCommand) {
-      updateDb((db) => {
-        db.allowedPatterns = db.allowedPatterns || [];
-        const exists = (db.allowedPatterns as any[]).some(
-          (p: any) => (p.pattern || p) === toolCommand && p.toolName === (toolName ?? undefined)
-        );
-        if (!exists) {
-          const kind = toolName
-            ? (["Write", "Edit", "MultiEdit", "Read"].includes(toolName) ? toolName.toLowerCase() : "execute")
-            : "exact";
-          (db.allowedPatterns as any[]).push({
-            pattern: toolCommand,
-            variant: kind,
-            toolName: toolName ?? undefined,
-            createdAt: new Date().toISOString(),
-          });
-        }
-      });
+      const existing = sqliteDb.getAllowedPatterns();
+      const exists = existing.some(
+        (p) => (p.pattern || (p as any)) === toolCommand && p.toolName === (toolName ?? undefined)
+      );
+      if (!exists) {
+        const kind = toolName
+          ? (["Write", "Edit", "MultiEdit", "Read"].includes(toolName) ? toolName.toLowerCase() : "execute")
+          : "exact";
+        sqliteDb.insertAllowedPattern({
+          pattern: toolCommand,
+          variant: kind as AllowSimilarPattern["variant"],
+          toolName: toolName ?? undefined,
+          createdAt: new Date().toISOString(),
+        });
+      }
     }
 
-    const workspace = db.workspaces.find((w) => w.id === thread.workspaceId);
+    const workspace = sqliteDb.getWorkspaceById(thread.workspaceId);
     const wsPath = workspace?.path || thread.workspaceId;
     const agent = ClaudeAgent.getInstance(threadId, wsPath);
     wireAgent(agent, threadId);
@@ -1692,48 +1561,33 @@ const wsHandlers: WsHandlers = {
       result: { outcome: { outcome: "selected", optionId } },
     });
 
-    const permResponseMsg: Message = {
+    insertAndBroadcast(threadId, {
       id: newId("msg-perm"),
       threadId,
       timestamp: new Date().toISOString(),
       type: "permission_response",
       raw: { selected: { optionId } },
-    };
-
-    updateDb((db) => {
-      const t = db.threads.find((t) => t.id === threadId);
-      if (t) {
-        t.status = "thinking";
-        t.pendingPermissionId = undefined;
-        t.pendingPermissionOptions = undefined;
-      }
-      db.messages.push(permResponseMsg);
+    }, {
+      status: "thinking",
+      pendingPermissionId: undefined,
+      pendingPermissionOptions: undefined,
     });
-
-    broadcastToThread(threadId, permResponseMsg);
-    const updatedThread = readDb().threads.find((t) => t.id === threadId);
-    if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
   },
 
   cancel: (threadId) => {
     logInfo("server", "WS cancel requested", threadId);
     cancelPending.add(threadId);
 
-    const db = readDb();
-    const thread = db.threads.find((t) => t.id === threadId);
+    const thread = sqliteDb.getThreadById(threadId);
     if (!thread) return;
 
     if (!thread.sessionId) {
-      updateDb((db) => {
-        const t = db.threads.find((t) => t.id === threadId);
-        if (t) t.status = "idle";
-      });
-      const updatedThread = readDb().threads.find((t) => t.id === threadId);
+      const updatedThread = sqliteDb.updateThreadStatus(threadId, "idle");
       if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
       return;
     }
 
-    const workspace = db.workspaces.find((w) => w.id === thread.workspaceId);
+    const workspace = sqliteDb.getWorkspaceById(thread.workspaceId);
     const wsPath = workspace?.path || thread.workspaceId;
     const agent = ClaudeAgent.getInstance(threadId, wsPath);
     wireAgent(agent, threadId);
@@ -1744,43 +1598,32 @@ const wsHandlers: WsHandlers = {
         id: thread.pendingPermissionId,
         result: { outcome: { outcome: "cancelled" } },
       });
-      updateDb((db) => {
-        const t = db.threads.find((t) => t.id === threadId);
-        if (t) {
-          t.pendingPermissionId = undefined;
-          t.pendingPermissionOptions = undefined;
-        }
-        db.messages.push({
-          id: newId("msg-cancel-perm"),
-          threadId,
-          timestamp: new Date().toISOString(),
-          type: "permission_response",
-          raw: { selected: { optionId: "deny" } },
-        });
+      insertAndBroadcast(threadId, {
+        id: newId("msg-cancel-perm"),
+        threadId,
+        timestamp: new Date().toISOString(),
+        type: "permission_response",
+        raw: { selected: { optionId: "deny" } },
+      }, {
+        pendingPermissionId: undefined,
+        pendingPermissionOptions: undefined,
       });
     }
 
     cancelPending.delete(threadId);
     agent.cancel(thread.sessionId);
 
-    updateDb((db) => {
-      const t = db.threads.find((t) => t.id === threadId);
-      if (t) {
-        t.status = "idle";
-        t.pendingPermissionId = undefined;
-        t.pendingPermissionOptions = undefined;
-      }
-      db.messages.push({
-        id: newId("msg-cancel"),
-        threadId,
-        timestamp: new Date().toISOString(),
-        type: "system",
-        raw: { text: "Agent turn cancelled by user" },
-      });
+    insertAndBroadcast(threadId, {
+      id: newId("msg-cancel"),
+      threadId,
+      timestamp: new Date().toISOString(),
+      type: "system",
+      raw: { text: "Agent turn cancelled by user" },
+    }, {
+      status: "idle",
+      pendingPermissionId: undefined,
+      pendingPermissionOptions: undefined,
     });
-
-    const updatedThread = readDb().threads.find((t) => t.id === threadId);
-    if (updatedThread) broadcastThreadUpdate(threadId, updatedThread);
   },
 };
 
@@ -1800,7 +1643,7 @@ async function startServer() {
 
   const httpServer = app.listen(PORT, HOST, () => {
     console.log(`Server on http://${HOST}:${PORT}`);
-    initWebSocket(httpServer, readDb, newId, wsHandlers);
+    initWebSocket(httpServer, getThreadWithMessages, newId, wsHandlers);
   });
 }
 

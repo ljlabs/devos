@@ -37,7 +37,7 @@ vi.mock("fs", async () => {
 function createTestServer(): Promise<{ server: http.Server; port: number }> {
   return new Promise((resolve) => {
     const server = http.createServer();
-    const readDb = () => ({ messages: [], threads: [] });
+    const readDb = (_threadId: string) => ({ thread: undefined, messages: [] });
     const newId = (prefix: string) => `${prefix}-${Date.now()}`;
 
     initWebSocket(server, readDb, newId, {

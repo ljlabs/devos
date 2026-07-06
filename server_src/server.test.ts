@@ -1714,3 +1714,388 @@ describe("File Explorer API — /api/workspaces/:workspaceId/files/read", () => 
 		expect(resp.body.path).toBe("simple.txt");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Integration: Thread CRUD via the real server + SQLite
+// ---------------------------------------------------------------------------
+
+describe("Thread CRUD — integration with real SQLite", () => {
+	let wsId: string;
+
+	beforeEach(() => {
+		seedDb({ workspaces: [], threads: [], messages: [], allowedPatterns: [] });
+		// Seed a valid workspace
+		wsId = `ws-thread-test-${Date.now()}`;
+		seedDb({
+			workspaces: [{ id: wsId, name: "Thread Test WS", path: VALID_DIR }],
+			threads: [],
+			messages: [],
+			allowedPatterns: [],
+		});
+	});
+
+	// ── POST /api/workspaces/:workspaceId/threads ──────────────────────────
+
+	describe("POST /api/workspaces/:workspaceId/threads", () => {
+		it("creates a new thread", async () => {
+			const res = await request(app)
+				.post(`/api/workspaces/${wsId}/threads`)
+				.send({ title: "My Thread" });
+
+			expect(res.status).toBe(201);
+			expect(res.body.id).toBeDefined();
+			expect(res.body.title).toBe("My Thread");
+			expect(res.body.workspaceId).toBe(wsId);
+			expect(res.body.status).toBe("idle");
+		});
+
+		it("defaults title to 'Untitled' when omitted", async () => {
+			const res = await request(app)
+				.post(`/api/workspaces/${wsId}/threads`)
+				.send({});
+
+			expect(res.status).toBe(201);
+			expect(res.body.title).toBe("Untitled");
+		});
+
+		it("persists thread to DB", async () => {
+			const res = await request(app)
+				.post(`/api/workspaces/${wsId}/threads`)
+				.send({ title: "Persisted" });
+
+			const thread = sqliteDb.getThreadById(res.body.id);
+			expect(thread).toBeDefined();
+			expect(thread?.title).toBe("Persisted");
+			expect(thread?.workspaceId).toBe(wsId);
+		});
+	});
+
+	// ── GET /api/threads/:threadId ────────────────────────────────────────
+
+	describe("GET /api/threads/:threadId", () => {
+		it("returns a single thread by id", async () => {
+			const createRes = await request(app)
+				.post(`/api/workspaces/${wsId}/threads`)
+				.send({ title: "Fetch Me" });
+
+			const res = await request(app).get(`/api/threads/${createRes.body.id}`);
+			expect(res.status).toBe(200);
+			expect(res.body.id).toBe(createRes.body.id);
+			expect(res.body.title).toBe("Fetch Me");
+		});
+
+		it("returns 404 for non-existent thread", async () => {
+			const res = await request(app).get("/api/threads/nonexistent");
+			expect(res.status).toBe(404);
+		});
+	});
+
+	// ── GET /api/workspaces/:workspaceId/threads ──────────────────────────
+
+	describe("GET /api/workspaces/:workspaceId/threads", () => {
+		it("returns all threads for a workspace", async () => {
+			await request(app)
+				.post(`/api/workspaces/${wsId}/threads`)
+				.send({ title: "T1" });
+			await request(app)
+				.post(`/api/workspaces/${wsId}/threads`)
+				.send({ title: "T2" });
+
+			const res = await request(app).get(`/api/workspaces/${wsId}/threads`);
+			expect(res.status).toBe(200);
+			expect(res.body).toHaveLength(2);
+			expect(res.body.map((t: any) => t.title).sort()).toEqual(["T1", "T2"]);
+		});
+
+		it("returns empty array for workspace with no threads", async () => {
+			const res = await request(app).get(`/api/workspaces/${wsId}/threads`);
+			expect(res.status).toBe(200);
+			expect(res.body).toEqual([]);
+		});
+	});
+
+	// ── PATCH /api/threads/:threadId ──────────────────────────────────────
+
+	describe("PATCH /api/threads/:threadId", () => {
+		it("updates thread title", async () => {
+			const createRes = await request(app)
+				.post(`/api/workspaces/${wsId}/threads`)
+				.send({ title: "Old Title" });
+
+			const res = await request(app)
+				.patch(`/api/threads/${createRes.body.id}`)
+				.send({ title: "New Title" });
+
+			expect(res.status).toBe(200);
+			expect(res.body.title).toBe("New Title");
+
+			// Verify persisted
+			const thread = sqliteDb.getThreadById(createRes.body.id);
+			expect(thread?.title).toBe("New Title");
+		});
+
+		it("returns 400 when title is missing", async () => {
+			const createRes = await request(app)
+				.post(`/api/workspaces/${wsId}/threads`)
+				.send({ title: "T" });
+
+			const res = await request(app)
+				.patch(`/api/threads/${createRes.body.id}`)
+				.send({});
+
+			expect(res.status).toBe(400);
+		});
+
+		it("returns 404 for non-existent thread", async () => {
+			const res = await request(app)
+				.patch("/api/threads/nonexistent")
+				.send({ title: "X" });
+			expect(res.status).toBe(404);
+		});
+	});
+
+	// ── DELETE /api/threads/:threadId ─────────────────────────────────────
+
+	describe("DELETE /api/threads/:threadId", () => {
+		it("deletes a thread", async () => {
+			const createRes = await request(app)
+				.post(`/api/workspaces/${wsId}/threads`)
+				.send({ title: "To Delete" });
+
+			const res = await request(app).delete(`/api/threads/${createRes.body.id}`);
+			expect(res.status).toBe(200);
+
+			// Verify gone
+			const getRes = await request(app).get(`/api/threads/${createRes.body.id}`);
+			expect(getRes.status).toBe(404);
+		});
+
+		it("returns 404 for non-existent thread", async () => {
+			const res = await request(app).delete("/api/threads/nonexistent");
+			expect(res.status).toBe(404);
+		});
+
+		it("cascades to messages", async () => {
+			const createRes = await request(app)
+				.post(`/api/workspaces/${wsId}/threads`)
+				.send({ title: "Cascade" });
+			const threadId = createRes.body.id;
+
+			// Manually insert a message
+			sqliteDb.insertMessage({
+				id: "msg-cascade",
+				threadId,
+				timestamp: new Date().toISOString(),
+				raw: { text: "hello" },
+				type: "user_message",
+			});
+
+			// Delete thread
+			await request(app).delete(`/api/threads/${threadId}`);
+
+			// Messages should be gone
+			const msgs = sqliteDb.getMessagesByThread(threadId);
+			expect(msgs).toHaveLength(0);
+		});
+	});
+
+	// ── GET /api/threads/:threadId/messages ───────────────────────────────
+
+	describe("GET /api/threads/:threadId/messages", () => {
+		it("returns messages for a thread", async () => {
+			const createRes = await request(app)
+				.post(`/api/workspaces/${wsId}/threads`)
+				.send({ title: "Msg Thread" });
+			const threadId = createRes.body.id;
+
+			// Insert messages directly via sqliteDb
+			sqliteDb.insertMessage({
+				id: "msg-1",
+				threadId,
+				timestamp: "2024-01-01T00:00:00.000Z",
+				raw: { role: "user", content: "hello" },
+				type: "user_message",
+			});
+			sqliteDb.insertMessage({
+				id: "msg-2",
+				threadId,
+				timestamp: "2024-01-01T00:00:01.000Z",
+				raw: { text: "world" },
+				type: "session/update",
+			});
+
+			const res = await request(app).get(`/api/threads/${threadId}/messages`);
+			expect(res.status).toBe(200);
+			expect(res.body).toHaveLength(2);
+			// Should be in timestamp order
+			expect(res.body[0].id).toBe("msg-1");
+			expect(res.body[1].id).toBe("msg-2");
+			// raw should be parsed JSON
+			expect(res.body[0].raw.role).toBe("user");
+		});
+
+		it("returns empty array for thread with no messages", async () => {
+			const createRes = await request(app)
+				.post(`/api/workspaces/${wsId}/threads`)
+				.send({ title: "Empty" });
+
+			const res = await request(app).get(`/api/threads/${createRes.body.id}/messages`);
+			expect(res.status).toBe(200);
+			expect(res.body).toEqual([]);
+		});
+	});
+
+	// ── GET /api/workspaces/:workspaceId (single workspace) ───────────────
+
+	describe("GET /api/workspaces/:workspaceId", () => {
+		it("returns a single workspace", async () => {
+			const res = await request(app).get(`/api/workspaces/${wsId}`);
+			expect(res.status).toBe(200);
+			expect(res.body.id).toBe(wsId);
+			expect(res.body.name).toBe("Thread Test WS");
+		});
+
+		it("returns 404 for non-existent workspace", async () => {
+			const res = await request(app).get("/api/workspaces/ws-nonexistent");
+			expect(res.status).toBe(404);
+		});
+	});
+
+	// ── Workspace CRUD ────────────────────────────────────────────────────
+
+	describe("Workspace PATCH", () => {
+		it("updates workspace name", async () => {
+			const res = await request(app)
+				.patch(`/api/workspaces/${wsId}`)
+				.send({ name: "Renamed" });
+
+			expect(res.status).toBe(200);
+			expect(res.body.name).toBe("Renamed");
+
+			const ws = sqliteDb.getWorkspaceById(wsId);
+			expect(ws?.name).toBe("Renamed");
+		});
+
+		it("rejects path changes", async () => {
+			const res = await request(app)
+				.patch(`/api/workspaces/${wsId}`)
+				.send({ path: "/new/path" });
+
+			expect(res.status).toBe(400);
+		});
+	});
+
+	describe("DELETE /api/workspaces/:workspaceId — cascade", () => {
+		it("cascades to threads and messages", async () => {
+			// Create a thread with messages
+			const threadRes = await request(app)
+				.post(`/api/workspaces/${wsId}/threads`)
+				.send({ title: "Cascade Thread" });
+			const threadId = threadRes.body.id;
+
+			sqliteDb.insertMessage({
+				id: "msg-del-ws",
+				threadId,
+				timestamp: new Date().toISOString(),
+				raw: { text: "hello" },
+				type: "user_message",
+			});
+
+			// Delete workspace
+			const res = await request(app).delete(`/api/workspaces/${wsId}`);
+			expect(res.status).toBe(200);
+
+			// Everything should be gone
+			expect(sqliteDb.getWorkspaceById(wsId)).toBeUndefined();
+			expect(sqliteDb.getThreadById(threadId)).toBeUndefined();
+			expect(sqliteDb.getMessagesByThread(threadId)).toHaveLength(0);
+		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Integration: AllowedPatterns via the real server + SQLite
+// ---------------------------------------------------------------------------
+
+describe("AllowedPatterns CRUD — integration with real SQLite", () => {
+	beforeEach(() => {
+		seedDb({ workspaces: [], threads: [], messages: [], allowedPatterns: [] });
+	});
+
+	describe("POST /api/allowedPatterns", () => {
+		it("saves a new pattern", async () => {
+			const res = await request(app)
+				.post("/api/allowedPatterns")
+				.send({ pattern: "npm run *", toolName: "Bash", variant: "execute" });
+
+			expect(res.status).toBe(201);
+			const saved = res.body.find((p: any) => p.pattern === "npm run *");
+			expect(saved).toBeDefined();
+			expect(saved.toolName).toBe("Bash");
+		});
+
+		it("does not duplicate patterns with same pattern+toolName", async () => {
+			await request(app)
+				.post("/api/allowedPatterns")
+				.send({ pattern: "npm run *", toolName: "Bash", variant: "execute" });
+
+			await request(app)
+				.post("/api/allowedPatterns")
+				.send({ pattern: "npm run *", toolName: "Bash", variant: "execute" });
+
+			const res = await request(app).get("/api/allowedPatterns");
+			const npmPatterns = res.body.filter((p: any) => p.pattern === "npm run *");
+			expect(npmPatterns).toHaveLength(1);
+		});
+
+		it("allows same pattern for different tools", async () => {
+			await request(app)
+				.post("/api/allowedPatterns")
+				.send({ pattern: "npm run *", toolName: "Bash", variant: "execute" });
+
+			await request(app)
+				.post("/api/allowedPatterns")
+				.send({ pattern: "npm run *", toolName: "Edit", variant: "edit" });
+
+			const res = await request(app).get("/api/allowedPatterns");
+			const npmPatterns = res.body.filter((p: any) => p.pattern === "npm run *");
+			expect(npmPatterns).toHaveLength(2);
+		});
+
+		it("returns 400 when pattern is missing", async () => {
+			const res = await request(app)
+				.post("/api/allowedPatterns")
+				.send({ toolName: "Bash" });
+			expect(res.status).toBe(400);
+		});
+	});
+
+	describe("GET /api/allowedPatterns", () => {
+		it("returns all patterns", async () => {
+			await request(app)
+				.post("/api/allowedPatterns")
+				.send({ pattern: "a", variant: "exact" });
+			await request(app)
+				.post("/api/allowedPatterns")
+				.send({ pattern: "b", variant: "wildcard" });
+
+			const res = await request(app).get("/api/allowedPatterns");
+			expect(res.body).toHaveLength(2);
+		});
+	});
+
+	describe("DELETE /api/allowedPatterns", () => {
+		it("deletes a pattern by pattern name", async () => {
+			await request(app)
+				.post("/api/allowedPatterns")
+				.send({ pattern: "to-delete", variant: "exact" });
+
+			const res = await request(app)
+				.delete("/api/allowedPatterns")
+				.send({ pattern: "to-delete" });
+
+			expect(res.status).toBe(200);
+			expect(res.body.find((p: any) => p.pattern === "to-delete")).toBeUndefined();
+		});
+	});
+});

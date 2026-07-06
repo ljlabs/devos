@@ -92,7 +92,7 @@ function sendJson(ws: WebSocket, data: Record<string, unknown>): void {
   }
 }
 
-function subscribeClient(ws: WebSocket, threadId: string, readDb: () => { messages: Message[]; threads: Thread[] }): void {
+function subscribeClient(ws: WebSocket, threadId: string, readDb: (threadId: string) => { thread: Thread | undefined; messages: Message[] }): void {
   let subs = clientSubscriptions.get(ws);
   if (!subs) {
     subs = new Set();
@@ -107,9 +107,8 @@ function subscribeClient(ws: WebSocket, threadId: string, readDb: () => { messag
   }
   subscribers.add(ws);
 
-  // Send thread status only — initial messages are loaded via the paginated HTTP endpoint
-  const db = readDb();
-  const thread = db.threads.find((t) => t.id === threadId);
+  // Send current state for the thread — targeted query, not full DB read
+  const { thread, messages } = sqliteDb.getThreadWithMessages(threadId);
 
   sendJson(ws, {
     type: "subscribed",
@@ -147,7 +146,7 @@ function unsubscribeClient(ws: WebSocket, threadId: string): void {
 
 export function initWebSocket(
   httpServer: Server,
-  readDb: () => { messages: Message[]; threads: Thread[] },
+  readDb: (threadId: string) => { thread: Thread | undefined; messages: Message[] },
   newId: (prefix: string) => string,
   wsHandlers: WsHandlers,
 ): WSServer {
