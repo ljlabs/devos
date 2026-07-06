@@ -10,6 +10,7 @@ import React from "react";
 import { Bot } from "lucide-react";
 import CopyButton from "../CopyButton";
 import { MarkdownContent } from "./MarkdownContent";
+import { formatTimestamp } from "../../utils/formatTimestamp";
 
 interface AgentTextBubbleProps {
   content: string;
@@ -22,7 +23,7 @@ export const AgentTextBubble = React.memo(function AgentTextBubble({
   timestamp,
   compact = false,
 }: AgentTextBubbleProps) {
-  const ts = typeof timestamp === 'string' ? new Date(timestamp) : new Date(timestamp);
+  const formattedTime = formatTimestamp(timestamp);
   
   if (compact) {
     // Mobile layout
@@ -36,10 +37,7 @@ export const AgentTextBubble = React.memo(function AgentTextBubble({
             <div className="text-[9px] font-mono text-emerald-400 pb-1.5 mb-1.5 border-b border-white/5 flex justify-between gap-2">
               <span>CLAUDE</span>
               <span className="text-slate-500 flex-shrink-0">
-                {ts.toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
+                {formattedTime}
               </span>
             </div>
             <div className="overflow-x-hidden">
@@ -65,10 +63,7 @@ export const AgentTextBubble = React.memo(function AgentTextBubble({
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-2 mb-3 border-b border-white/5 select-none text-[9px] sm:text-[10px] font-mono tracking-widest text-emerald-400 font-bold gap-1 sm:gap-0">
             <span>CLAUDE AI AGENT</span>
             <span className="text-slate-500 font-normal whitespace-nowrap">
-              {ts.toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
+              {formattedTime}
             </span>
           </div>
           <MarkdownContent content={content} />

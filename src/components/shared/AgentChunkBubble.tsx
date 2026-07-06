@@ -10,6 +10,7 @@ import React from "react";
 import { Bot } from "lucide-react";
 import CopyButton from "../CopyButton";
 import { MarkdownContent } from "./MarkdownContent";
+import { formatTimestamp } from "../../utils/formatTimestamp";
 
 interface AgentChunkBubbleProps {
   content: string;
@@ -22,7 +23,7 @@ export const AgentChunkBubble = React.memo(function AgentChunkBubble({
   timestamp,
   compact = false,
 }: AgentChunkBubbleProps) {
-  const ts = typeof timestamp === 'string' ? new Date(timestamp) : new Date(timestamp);
+  const formattedTime = formatTimestamp(timestamp);
   
   if (compact) {
     // Mobile layout
@@ -59,10 +60,7 @@ export const AgentChunkBubble = React.memo(function AgentChunkBubble({
           <div className="flex items-center justify-between pb-2 mb-3 border-b border-white/5 select-none text-[10px] font-mono tracking-widest text-emerald-400 font-bold">
             <span>CLAUDE AI AGENT</span>
             <span className="text-slate-500 font-normal">
-              {ts.toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
+              {formattedTime}
             </span>
           </div>
           <MarkdownContent content={content} />

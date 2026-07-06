@@ -7,6 +7,7 @@
  */
 
 import React from "react";
+import { formatTimestamp } from "../../utils/formatTimestamp";
 
 interface UserMessageBubbleProps {
   content: string;
@@ -21,8 +22,8 @@ export const UserMessageBubble = React.memo(function UserMessageBubble({
   compact = false,
   pending = false,
 }: UserMessageBubbleProps) {
-  const ts = typeof timestamp === 'string' ? new Date(timestamp) : new Date(timestamp);
   const opacityClass = pending ? "opacity-50" : "";
+  const formattedTime = formatTimestamp(timestamp);
 
   if (compact) {
     // Mobile layout
@@ -33,10 +34,7 @@ export const UserMessageBubble = React.memo(function UserMessageBubble({
             {content}
           </p>
           <div className="text-[9px] text-slate-500 font-mono mt-1 text-right">
-            {ts.toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
+            {formattedTime}
           </div>
         </div>
       </div>
@@ -51,10 +49,7 @@ export const UserMessageBubble = React.memo(function UserMessageBubble({
           {content}
         </p>
         <div className="text-[9px] sm:text-[10px] text-slate-500 font-mono mt-2 text-right select-none">
-          {ts.toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
+          {formattedTime}
         </div>
       </div>
     </div>
