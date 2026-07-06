@@ -80,7 +80,7 @@ describe("FileEditorPanel", () => {
   });
 
   describe("Single-file mode (mobile)", () => {
-    it.skip("renders file name in tab bar", () => {
+    it("renders file name in tab bar", () => {
       render(
         <FileEditorPanel
           {...defaultProps}
@@ -90,7 +90,8 @@ describe("FileEditorPanel", () => {
           isDirty={false}
         />
       );
-      expect(screen.getByText("index.ts")).toBeInTheDocument();
+      // In single-file mode, it renders the full path
+      expect(screen.getByText("src/index.ts")).toBeInTheDocument();
     });
 
     it("shows dirty indicator when isDirty is true", () => {

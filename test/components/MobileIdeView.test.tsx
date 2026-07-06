@@ -1,7 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import MobileIdeView from "../../src/components/MobileIdeView";
 import { IdePanel } from "../../src/types";
+
+// Mock fetch BEFORE component import
+const mockFetch = vi.fn(() =>
+  Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve([]),
+  })
+);
+global.fetch = mockFetch as any;
 
 // Mock Monaco Editor
 vi.mock("@monaco-editor/react", () => ({
@@ -30,10 +39,6 @@ vi.mock("../../src/components/FileExplorer", () => ({
   default: (props: any) => <div data-testid="file-explorer" />,
 }));
 
-// Mock fetch
-const mockFetch = vi.fn();
-global.fetch = mockFetch as any;
-
 const defaultProps = {
   panel: "editor" as IdePanel,
   workspaceId: "ws-1",
@@ -45,17 +50,25 @@ const defaultProps = {
 describe("MobileIdeView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFetch.mockReset();
+    mockFetch.mockClear();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([]),
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
   });
 
   describe("Editor panel", () => {
-    it.skip("renders empty state when no file selected", () => {
+    it("renders empty state when no file selected", () => {
       render(<MobileIdeView {...defaultProps} />);
       expect(screen.getByText("No file selected.")).toBeInTheDocument();
       expect(screen.getByText(/Open a file from the FILES tab/)).toBeInTheDocument();
     });
 
-    it.skip("renders editor panel header", () => {
+    it("renders editor panel header", () => {
       render(<MobileIdeView {...defaultProps} />);
       expect(screen.getByText("Editor")).toBeInTheDocument();
     });
@@ -76,12 +89,12 @@ describe("MobileIdeView", () => {
   });
 
   describe("Files panel", () => {
-    it.skip("renders file explorer", () => {
+    it("renders file explorer", () => {
       render(<MobileIdeView {...defaultProps} panel="files" />);
       expect(screen.getByTestId("file-explorer")).toBeInTheDocument();
     });
 
-    it.skip("shows Files toolbar", () => {
+    it("shows Files toolbar", () => {
       render(<MobileIdeView {...defaultProps} panel="files" />);
       expect(screen.getByText("Files")).toBeInTheDocument();
     });
@@ -97,7 +110,7 @@ describe("MobileIdeView", () => {
   });
 
   describe("Navigation", () => {
-    it.skip("calls onBack when back button is clicked", () => {
+    it("calls onBack when back button is clicked", () => {
       const onBack = vi.fn();
       render(<MobileIdeView {...defaultProps} onBack={onBack} />);
       const backBtn = screen.getAllByRole("button").find((btn) =>
