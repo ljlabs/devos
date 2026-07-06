@@ -359,3 +359,106 @@ export function writeFile(
     lines,
   };
 }
+
+/**
+ * Move a file or directory to a new parent directory within the workspace.
+ *
+ * @param workspaceRoot Absolute path to the workspace root directory
+ * @param sourceRelativePath Current relative path from workspace root
+ * @param destParentRelativePath Destination parent directory relative path (or empty for root)
+ * @returns FileEntry of the moved entry
+ */
+export function moveEntry(
+  workspaceRoot: string,
+  sourceRelativePath: string,
+  destParentRelativePath: string
+): FileEntry {
+  const sourceAbsPath = resolveWithinWorkspace(
+    workspaceRoot,
+    sourceRelativePath
+  );
+
+  if (!sourceAbsPath) {
+    throw new Error("Invalid source path: attempted traversal outside workspace");
+  }
+
+  if (!fs.existsSync(sourceAbsPath)) {
+    throw new Error(`Source not found: ${sourceRelativePath}`);
+  }
+
+  const destParentAbsPath = resolveWithinWorkspace(
+    workspaceRoot,
+    destParentRelativePath || "."
+  );
+
+  if (!destParentAbsPath) {
+    throw new Error(
+      "Invalid destination path: attempted traversal outside workspace"
+    );
+  }
+
+  if (!fs.existsSync(destParentAbsPath)) {
+    throw new Error(`Destination directory not found: ${destParentRelativePath}`);
+  }
+
+  const stat = fs.statSync(destParentAbsPath);
+  if (!stat.isDirectory()) {
+    throw new Error(
+      `Destination is not a directory: ${destParentRelativePath}`
+    );
+  }
+
+  // Extract the base name from the source path
+  const baseName = path.basename(sourceAbsPath);
+  const destAbsPath = path.join(destParentAbsPath, baseName);
+
+  // Verify destination path is still within workspace
+  const newRelative = path.relative(
+    path.resolve(workspaceRoot),
+    destAbsPath
+  );
+  if (newRelative.startsWith("..") || path.isAbsolute(newRelative)) {
+    throw new Error("Invalid destination: would escape workspace");
+  }
+
+  if (fs.existsSync(destAbsPath)) {
+    throw new Error(`Already exists at destination: ${baseName}`);
+  }
+
+  // Prevent moving a directory into itself
+  if (
+    fs.statSync(sourceAbsPath).isDirectory() &&
+    destAbsPath.startsWith(sourceAbsPath + path.sep)
+  ) {
+    throw new Error("Cannot move directory into itself");
+  }
+
+  // Move the file or directory
+  // fs.renameSync fails with EPERM/EXDEV on Windows when crossing certain path boundaries
+  // (junctions, different volumes, etc). Fall back to recursive copy + delete in that case.
+  try {
+    fs.renameSync(sourceAbsPath, destAbsPath);
+  } catch (renameErr: any) {
+    if (renameErr.code === "EPERM" || renameErr.code === "EXDEV") {
+      // Copy recursively then remove source
+      fs.cpSync(sourceAbsPath, destAbsPath, { recursive: true });
+      fs.rmSync(sourceAbsPath, { recursive: true, force: true });
+    } else {
+      throw renameErr;
+    }
+  }
+
+  const movedStat = fs.statSync(destAbsPath);
+  const newRelativePath =
+    destParentRelativePath === "." || !destParentRelativePath
+      ? baseName
+      : `${destParentRelativePath}/${baseName}`;
+
+  return {
+    name: baseName,
+    path: newRelativePath.split(path.sep).join("/"),
+    type: movedStat.isDirectory() ? "directory" : "file",
+    size: movedStat.isFile() ? movedStat.size : undefined,
+    modified: movedStat.mtime.toISOString(),
+  };
+}

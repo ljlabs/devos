@@ -4,7 +4,7 @@ import MobileIdeView from "../../src/components/MobileIdeView";
 import { IdePanel } from "../../src/types";
 
 // Mock fetch BEFORE component import
-const mockFetch = vi.fn(() =>
+const mockFetch = vi.fn((): Promise<any> =>
   Promise.resolve({
     ok: true,
     json: () => Promise.resolve([]),

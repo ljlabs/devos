@@ -203,6 +203,48 @@ export default function MobileIdeView({
     [workspaceId, fetchDirectory, activeFilePath]
   );
 
+  const handleMoveEntry = useCallback(
+    async (sourcePath: string, destParentPath: string) => {
+      console.log(`[MobileIdeView] handleMoveEntry called: ${sourcePath} → ${destParentPath}`);
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/files/move`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sourcePath, destParentPath }),
+        });
+        console.log(`[MobileIdeView] move API response status: ${res.status}`);
+        if (res.ok) {
+          console.log(`[MobileIdeView] move successful, refreshing directories`);
+          // Refresh source parent directory
+          const srcParentPath = sourcePath.substring(0, sourcePath.lastIndexOf("/"));
+          if (srcParentPath) {
+            console.log(`[MobileIdeView] refreshing source parent: ${srcParentPath}`);
+            await fetchDirectory(srcParentPath);
+          } else {
+            console.log(`[MobileIdeView] refreshing source root`);
+            await fetchDirectory();
+          }
+          // Refresh destination directory
+          console.log(`[MobileIdeView] refreshing destination: ${destParentPath}`);
+          await fetchDirectory(destParentPath);
+          // Update active file if it was moved
+          if (activeFilePath === sourcePath) {
+            const fileName = sourcePath.substring(sourcePath.lastIndexOf("/") + 1);
+            const newPath = destParentPath ? `${destParentPath}/${fileName}` : fileName;
+            console.log(`[MobileIdeView] updating active file: ${sourcePath} → ${newPath}`);
+            setActiveFilePath(newPath);
+          }
+        } else {
+          const error = await res.json();
+          console.error(`[MobileIdeView] move failed: ${error.error}`);
+        }
+      } catch (e) {
+        console.error("Error moving entry:", e);
+      }
+    },
+    [workspaceId, fetchDirectory, activeFilePath]
+  );
+
   const handleFileSelect = useCallback(
     (entry: FileEntry) => {
       if (entry.type === "file") {
@@ -277,6 +319,7 @@ export default function MobileIdeView({
           onCreateEntry={handleCreateEntry}
           onRenameEntry={handleRenameEntry}
           onDeleteEntry={handleDeleteEntry}
+          onMoveEntry={handleMoveEntry}
         />
       )}
 

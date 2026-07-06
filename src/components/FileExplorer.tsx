@@ -103,6 +103,7 @@ interface FileExplorerProps {
   onCreateEntry?: (parentPath: string, name: string, type: "file" | "directory") => Promise<void>;
   onRenameEntry?: (oldPath: string, newName: string) => Promise<void>;
   onDeleteEntry?: (path: string) => Promise<void>;
+  onMoveEntry?: (sourcePath: string, destParentPath: string) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +244,41 @@ function InlineEditInput({
 }
 
 // ---------------------------------------------------------------------------
+// Touch drag state (module-level so it survives re-renders and is shared
+// across all FileTreeItem instances during a single drag gesture)
+// ---------------------------------------------------------------------------
+
+interface TouchDragState {
+  sourcePath: string;
+  sourceType: string;
+  ghost: HTMLDivElement | null;
+  lastTarget: HTMLElement | null;
+  hoverTimeout: NodeJS.Timeout | null;
+}
+
+const touchDrag: TouchDragState = {
+  sourcePath: "",
+  sourceType: "",
+  ghost: null,
+  lastTarget: null,
+  hoverTimeout: null,
+};
+
+function clearTouchHoverTimeout() {
+  if (touchDrag.hoverTimeout) {
+    clearTimeout(touchDrag.hoverTimeout);
+    touchDrag.hoverTimeout = null;
+  }
+}
+
+function removeTouchGhost() {
+  if (touchDrag.ghost) {
+    touchDrag.ghost.remove();
+    touchDrag.ghost = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -260,6 +296,7 @@ export default function FileExplorer({
   onCreateEntry,
   onRenameEntry,
   onDeleteEntry,
+  onMoveEntry,
 }: FileExplorerProps) {
   return (
     <div className={`${depth > 0 ? "pl-4" : ""}`}>
@@ -279,6 +316,7 @@ export default function FileExplorer({
           onCreateEntry={onCreateEntry}
           onRenameEntry={onRenameEntry}
           onDeleteEntry={onDeleteEntry}
+          onMoveEntry={onMoveEntry}
         />
       ))}
     </div>
@@ -303,6 +341,7 @@ interface FileTreeItemProps {
   onCreateEntry?: (parentPath: string, name: string, type: "file" | "directory") => Promise<void>;
   onRenameEntry?: (oldPath: string, newName: string) => Promise<void>;
   onDeleteEntry?: (path: string) => Promise<void>;
+  onMoveEntry?: (sourcePath: string, destParentPath: string) => Promise<void>;
 }
 
 function FileTreeItem({
@@ -319,6 +358,7 @@ function FileTreeItem({
   onCreateEntry,
   onRenameEntry,
   onDeleteEntry,
+  onMoveEntry,
 }: FileTreeItemProps) {
   const isDirectory = entry.type === "directory";
   const isExpanded = expandedFolders.has(entry.path);
@@ -326,8 +366,259 @@ function FileTreeItem({
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [inlineEdit, setInlineEdit] = useState<InlineEditState | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
+  // Use a ref for the hover timeout so setTimeout callbacks always see the latest value
+  // (useState causes stale closures; the timeout fires but sees the old state)
+  const dragHoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const itemRef = useRef<HTMLDivElement>(null);
 
+  // Log component mount/props
+  useEffect(() => {
+    console.log(`[FileTreeItem] mounted/updated: ${entry.name} (dir=${isDirectory}, expanded=${isExpanded}, dragOver=${isDragOver})`);
+  }, [entry.name, isDirectory, isExpanded, isDragOver]);
+
+  const clearHoverTimeout = () => {
+    if (dragHoverTimeoutRef.current) {
+      clearTimeout(dragHoverTimeoutRef.current);
+      dragHoverTimeoutRef.current = null;
+    }
+  };
+
+  // ------------------------------------------------------------------
+  // Touch drag-and-drop (mobile — HTML5 drag events don't fire on touch)
+  // ------------------------------------------------------------------
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (inlineEdit) return;
+    const touch = e.touches[0];
+    console.log(`[FileExplorer] touchStart on: ${entry.path} (${entry.type})`);
+
+    touchDrag.sourcePath = entry.path;
+    touchDrag.sourceType = entry.type;
+
+    // Create a ghost element that follows the finger
+    const ghost = document.createElement("div");
+    ghost.textContent = entry.name;
+    ghost.style.cssText = [
+      "position:fixed",
+      "pointer-events:none",
+      "z-index:9999",
+      "padding:4px 10px",
+      "border-radius:6px",
+      "background:#1e1e24",
+      "border:1px solid rgba(52,211,153,0.5)",
+      "color:#e4e2e4",
+      "font-size:12px",
+      "font-family:monospace",
+      "white-space:nowrap",
+      "opacity:0.9",
+      `left:${touch.clientX + 12}px`,
+      `top:${touch.clientY - 20}px`,
+    ].join(";");
+    document.body.appendChild(ghost);
+    touchDrag.ghost = ghost;
+  };
+
+  // React registers synthetic touchmove as passive, so e.preventDefault() is silently
+  // ignored and the page scrolls while dragging. Instead we attach a native non-passive
+  // listener directly on the element as soon as touchstart fires, and remove it on
+  // touchend/touchcancel. This is the only reliable way to prevent scroll on mobile.
+  useEffect(() => {
+    const el = itemRef.current;
+    if (!el) return;
+
+    const nativeTouchMove = (e: TouchEvent) => {
+      // Only block scroll if we're actively dragging from this element
+      if (touchDrag.sourcePath === entry.path) {
+        e.preventDefault();
+      }
+    };
+
+    el.addEventListener("touchmove", nativeTouchMove, { passive: false });
+    return () => el.removeEventListener("touchmove", nativeTouchMove);
+  }, [entry.path]);
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!touchDrag.sourcePath) return;
+    // Note: scroll prevention is handled by the native non-passive listener above.
+    const touch = e.touches[0];
+
+    // Move ghost with finger
+    if (touchDrag.ghost) {
+      touchDrag.ghost.style.left = `${touch.clientX + 12}px`;
+      touchDrag.ghost.style.top = `${touch.clientY - 20}px`;
+    }
+
+    // Find the element under the finger (ghost has pointer-events:none so it's transparent)
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+    const row = el?.closest<HTMLElement>("[data-entry-path]");
+
+    if (row === touchDrag.lastTarget) return; // same target, nothing changed
+
+    // Clear highlight + timer from previous target
+    if (touchDrag.lastTarget) {
+      touchDrag.lastTarget.classList.remove("bg-emerald-500/20", "border-l-2", "border-emerald-400", "text-white");
+      clearTouchHoverTimeout();
+    }
+
+    touchDrag.lastTarget = row ?? null;
+
+    if (row) {
+      const targetPath = row.dataset.entryPath!;
+      const targetType = row.dataset.entryType!;
+
+      // Highlight the target row
+      row.classList.add("bg-emerald-500/20", "border-l-2", "border-emerald-400", "text-white");
+
+      // Auto-expand collapsed directory after 800 ms
+      if (targetType === "directory" && row.dataset.entryExpanded !== "true") {
+        console.log(`[FileExplorer] touch hover - starting expand timer for: ${targetPath}`);
+        touchDrag.hoverTimeout = setTimeout(() => {
+          console.log(`[FileExplorer] touch hover - expanding: ${targetPath}`);
+          // Simulate a click on the chevron / row to expand
+          const toggleBtn = row.querySelector<HTMLElement>("[data-toggle-folder]");
+          toggleBtn ? toggleBtn.click() : row.click();
+          touchDrag.hoverTimeout = null;
+        }, 800);
+      }
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!touchDrag.sourcePath) return;
+
+    // Capture last target BEFORE removing ghost (DOM repaints asynchronously on real hardware)
+    const dropTarget = touchDrag.lastTarget;
+    const sourcePath = touchDrag.sourcePath;
+
+    removeTouchGhost();
+    clearTouchHoverTimeout();
+
+    // Remove highlight from last target
+    if (dropTarget) {
+      dropTarget.classList.remove("bg-emerald-500/20", "border-l-2", "border-emerald-400", "text-white");
+    }
+
+    // Reset drag state before async work
+    touchDrag.sourcePath = "";
+    touchDrag.sourceType = "";
+    touchDrag.lastTarget = null;
+
+    // Use the last hovered row tracked during touchmove — more reliable than
+    // elementFromPoint at touchend because the ghost may still be in the DOM
+    // during the synchronous repaint on real hardware.
+    if (dropTarget && onMoveEntry) {
+      const targetPath = dropTarget.dataset.entryPath!;
+      const targetType = dropTarget.dataset.entryType!;
+
+      let destPath = targetPath;
+      if (targetType !== "directory") {
+        const lastSlash = targetPath.lastIndexOf("/");
+        destPath = lastSlash > 0 ? targetPath.substring(0, lastSlash) : "";
+      }
+
+      console.log(`[FileExplorer] touch drop: ${sourcePath} → "${destPath || "root"}"`);
+
+      if (sourcePath && sourcePath !== destPath) {
+        onMoveEntry(sourcePath, destPath).then(() => {
+          console.log(`[FileExplorer] touch move completed`);
+        }).catch((err) => {
+          console.error("[FileExplorer] touch move error:", err);
+        });
+      } else {
+        if (!sourcePath) console.log(`[FileExplorer] touch: no sourcePath`);
+        if (sourcePath === destPath) console.log(`[FileExplorer] touch: source === dest, skipping`);
+      }
+    } else {
+      console.log(`[FileExplorer] touch: no drop target found, cancelling`);
+    }
+  };
+
+  const handleTouchCancel = () => {
+    // OS cancelled the gesture (e.g. incoming call, notification)
+    console.log(`[FileExplorer] touchCancel on: ${entry.path}, cleaning up`);
+    if (touchDrag.lastTarget) {
+      touchDrag.lastTarget.classList.remove("bg-emerald-500/20", "border-l-2", "border-emerald-400", "text-white");
+    }
+    removeTouchGhost();
+    clearTouchHoverTimeout();
+    touchDrag.sourcePath = "";
+    touchDrag.sourceType = "";
+    touchDrag.lastTarget = null;
+  };
+
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    console.log(`[FileExplorer] dragStart on: ${entry.path} (${entry.type})`);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("application/x-file-path", entry.path);
+    e.dataTransfer.setData("application/x-file-type", entry.type);
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    setIsDragOver(true);
+
+    // Auto-expand collapsed folder on hover — only start the timer once
+    if (isDirectory && !isExpanded && !dragHoverTimeoutRef.current) {
+      console.log(`[FileExplorer] starting 800ms hover timer for: ${entry.path}`);
+      dragHoverTimeoutRef.current = setTimeout(() => {
+        console.log(`[FileExplorer] hover timeout fired - expanding: ${entry.path}`);
+        dragHoverTimeoutRef.current = null;
+        onToggleFolder(entry.path);
+      }, 800);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    // relatedTarget is the element the cursor moved into — if it's still inside
+    // this row we get spurious leave events from child nodes, so ignore those
+    if (itemRef.current && itemRef.current.contains(e.relatedTarget as Node)) {
+      return;
+    }
+    console.log(`[FileExplorer] dragLeave: ${entry.path}`);
+    setIsDragOver(false);
+    clearHoverTimeout();
+  };
+
+  const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    clearHoverTimeout();
+
+    const sourcePath = e.dataTransfer.getData("application/x-file-path");
+
+    // Dropped on a folder → move into it
+    // Dropped on a file → move to the same directory as that file
+    let destPath = entry.path;
+    if (!isDirectory) {
+      const lastSlash = entry.path.lastIndexOf("/");
+      destPath = lastSlash > 0 ? entry.path.substring(0, lastSlash) : "";
+      console.log(`[FileExplorer] dropped on file, using parent: "${destPath || "root"}"`);
+    } else {
+      console.log(`[FileExplorer] dropped on folder: ${entry.path}`);
+    }
+
+    console.log(`[FileExplorer] move ${sourcePath} → "${destPath || "root"}", onMoveEntry=${!!onMoveEntry}`);
+
+    if (sourcePath && sourcePath !== destPath && onMoveEntry) {
+      try {
+        await onMoveEntry(sourcePath, destPath);
+        console.log(`[FileExplorer] move completed`);
+      } catch (error) {
+        console.error("[FileExplorer] move error:", error);
+      }
+    } else {
+      if (!sourcePath) console.log(`[FileExplorer] no sourcePath`);
+      if (sourcePath === destPath) console.log(`[FileExplorer] source === dest, skipping`);
+      if (!onMoveEntry) console.log(`[FileExplorer] onMoveEntry not provided`);
+    }
+  };
   const handleClick = () => {
     if (isDirectory) {
       onToggleFolder(entry.path);
@@ -384,13 +675,30 @@ function FileTreeItem({
   return (
     <div>
       <div
+        ref={itemRef}
         className={`flex items-center gap-1.5 py-1 pr-2 cursor-pointer transition-colors group ${
           isActive
             ? "bg-emerald-500/10 border-l-2 border-emerald-500 text-emerald-400"
+            : isDragOver
+            ? "bg-emerald-500/20 border-l-2 border-emerald-400 text-white"
             : "text-slate-300 hover:bg-white/5"
         }`}
         style={{ paddingLeft: `${paddingLeft + depth * 16}px` }}
         onClick={handleClick}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchCancel}
+        draggable={!inlineEdit}
+        data-testid={`file-tree-item-${entry.path}`}
+        data-entry-path={entry.path}
+        data-entry-type={entry.type}
+        data-entry-expanded={isExpanded ? "true" : "false"}
+        data-toggle-folder={isDirectory ? "true" : undefined}
         title={entry.path}
       >
         {/* Chevron for directories */}
@@ -511,6 +819,7 @@ function FileTreeItem({
                 onCreateEntry={onCreateEntry}
                 onRenameEntry={onRenameEntry}
                 onDeleteEntry={onDeleteEntry}
+                onMoveEntry={onMoveEntry}
               />
             )
           )}
