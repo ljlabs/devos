@@ -4,14 +4,18 @@
  *
  * TerminalView — iTerm2-style multi-tab terminal workspace (desktop only).
  *
- *  - A tab bar owns one independent pane layout per tab.
- *  - Each tab's layout is a tree of terminal panes and resizable splits
- *    (see utils/terminalLayout). Drag the dividers to resize; split or close
- *    panes from each pane's title bar.
- *  - All PTY sessions share one WebSocket via useTerminalSocket.
+ * PTY session and xterm Terminal lifecycle lives HERE, not in TerminalPane.
+ * Terminals are created synchronously in split/remove handlers BEFORE the
+ * layout state update, so by the time React renders the new tree, the
+ * Terminal instance is already in terminalsRef. This avoids the render→effect
+ * two-phase problem where new panes would show as null.
+ *
+ * The layout diff effect only handles teardown of removed terminals.
  */
 
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { Terminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
 import { Plus, X, SplitSquareHorizontal, SplitSquareVertical } from "lucide-react";
 import ResizableSplit from "./ResizableSplit";
 import TerminalPane from "./TerminalPane";
@@ -25,12 +29,33 @@ import {
   collectLeaves,
   type SplitDirection,
   type TerminalLayoutNode,
+  type TerminalPaneNode,
 } from "../../utils/terminalLayout";
+
+const TERMINAL_THEME = {
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Code", monospace',
+  fontSize: 13,
+  cursorBlink: true,
+  theme: {
+    background: "#0B0B0C",
+    foreground: "#E4E4E7",
+    cursor: "#10B981",
+    selectionBackground: "#10B98144",
+    black: "#0B0B0C",
+    brightBlack: "#52525B",
+  },
+  allowProposedApi: true as const,
+};
 
 interface TerminalTab {
   id: string;
   title: string;
   layout: TerminalLayoutNode;
+}
+
+interface ManagedTerminal {
+  term: Terminal;
+  unsubscribe: () => void;
 }
 
 let tabCounter = 0;
@@ -59,12 +84,98 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
   const [focusedLeafId, setFocusedLeafId] = useState<string | null>(null);
   const [draggedLeafId, setDraggedLeafId] = useState<string | null>(null);
 
+  // Managed terminals: Terminal instance + subscribe cleanup, keyed by sessionId.
+  const terminalsRef = useRef<Map<string, ManagedTerminal>>(new Map());
+  // Set of sessionIds that have already been created — prevents double-create
+  // when the same layout object is processed by both the handler and the teardown effect.
+  const knownSessionsRef = useRef<Set<string>>(new Set());
+  // Bump this to force a re-render after synchronous terminal creation.
+  const [, setTerminalVersion] = useState(0);
+
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeTabId) ?? tabs[0],
     [tabs, activeTabId]
   );
 
-  // Keep the focused-pane pointer valid as the layout changes.
+  // Ensure the initial leaf has a terminal on first render.
+  const initialLeaves = collectLeaves(activeTab.layout);
+  for (const leaf of initialLeaves) {
+    if (!terminalsRef.current.has(leaf.sessionId)) {
+      const term = new Terminal(TERMINAL_THEME);
+      const unsubscribe = socket.subscribe(
+        leaf.sessionId,
+        (output: string) => term.write(output),
+        (exitCode: number) => {
+          console.log(`[TerminalView] session ${leaf.sessionId} exited (code=${exitCode})`);
+        }
+      );
+      terminalsRef.current.set(leaf.sessionId, { term, unsubscribe });
+      socket.createTerminal(leaf.sessionId, leaf.cwd, 80, 24);
+      knownSessionsRef.current.add(leaf.sessionId);
+    }
+  }
+
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
+
+  // ── Create a terminal if not already managed ───────────────────────
+  const ensureTerminal = useCallback(
+    (leaf: TerminalPaneNode) => {
+      if (terminalsRef.current.has(leaf.sessionId)) return;
+
+      console.log(`[TerminalView] ensureTerminal: creating session ${leaf.sessionId}`);
+      const term = new Terminal(TERMINAL_THEME);
+      const unsubscribe = socket.subscribe(
+        leaf.sessionId,
+        (output: string) => term.write(output),
+        (exitCode: number) => {
+          console.log(`[TerminalView] session ${leaf.sessionId} exited (code=${exitCode})`);
+        }
+      );
+      terminalsRef.current.set(leaf.sessionId, { term, unsubscribe });
+      socket.createTerminal(leaf.sessionId, leaf.cwd, 80, 24);
+      knownSessionsRef.current.add(leaf.sessionId);
+    },
+    [socket]
+  );
+
+  // ── Teardown a terminal ────────────────────────────────────────────
+  const teardownTerminal = useCallback(
+    (sessionId: string) => {
+      const managed = terminalsRef.current.get(sessionId);
+      if (!managed) return;
+      console.log(`[TerminalView] teardownTerminal: closing session ${sessionId}`);
+      managed.unsubscribe();
+      terminalsRef.current.delete(sessionId);
+      socket.closeTerminal(sessionId);
+      managed.term.dispose();
+    },
+    [socket]
+  );
+
+  // ── Terminal lifecycle effect ─────────────────────────────────────
+  // 1. Create terminals for any leaf that exists in the layout but has
+  //    no managed terminal (handles both initial mount and re-creation
+  //    after the same leaf id reappears).
+  // 2. Tear down terminals that are no longer in the layout.
+  useEffect(() => {
+    const currentLeaves = collectLeaves(activeTab.layout);
+    const currentIds = new Set(currentLeaves.map((l) => l.sessionId));
+
+    // Tear down terminals removed from layout.
+    for (const id of knownSessionsRef.current) {
+      if (!currentIds.has(id)) {
+        teardownTerminal(id);
+      }
+    }
+
+    // Create terminals for leaves not yet managed (covers initial mount
+    // and the rare case where the layout is replaced entirely).
+    currentLeaves.forEach(ensureTerminal);
+    knownSessionsRef.current = currentIds;
+  }, [activeTab.layout, teardownTerminal, ensureTerminal]);
+
+  // ── Focus tracking ────────────────────────────────────────────────
   useEffect(() => {
     const leaves = collectLeaves(activeTab.layout);
     setFocusedLeafId((prev) => {
@@ -73,6 +184,9 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
     });
   }, [activeTab]);
 
+  // ── Tab / pane handlers ───────────────────────────────────────────
+  // Every handler that CHANGES the layout: ensure terminals for new leaves
+  // synchronously BEFORE calling updateActiveTab, so renderNode can access them.
   const updateActiveTab = useCallback(
     (layout: TerminalLayoutNode) => {
       setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, layout } : t)));
@@ -82,13 +196,18 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
 
   const handleSplitPane = useCallback(
     (leafId: string, direction: SplitDirection) => {
-      updateActiveTab(splitLeaf(activeTab.layout, leafId, direction, cwd));
+      console.log(`[TerminalView] handleSplitPane: leafId=${leafId}, direction=${direction}, focusedLeafId=${focusedLeafId}`);
+      const newLayout = splitLeaf(activeTab.layout, leafId, direction, cwd);
+      // Pre-create terminals for ALL new leaves (the split created one).
+      collectLeaves(newLayout).forEach(ensureTerminal);
+      updateActiveTab(newLayout);
       setFocusedLeafId((prev) => prev ?? leafId);
     },
-    [activeTab, updateActiveTab, cwd]
+    [activeTab, updateActiveTab, cwd, focusedLeafId, ensureTerminal]
   );
 
   const handleFocusLeaf = useCallback((leafId: string) => {
+    console.log(`[TerminalView] handleFocusLeaf: leafId=${leafId}`);
     setFocusedLeafId(leafId);
   }, []);
 
@@ -114,9 +233,12 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
   const handleMoveLeaf = useCallback(
     (fromId: string, toId: string, direction: SplitDirection) => {
       if (fromId === toId) return;
-      updateActiveTab(moveLeaf(activeTab.layout, fromId, toId, direction, cwd));
+      console.log(`[TerminalView] handleMoveLeaf: from=${fromId}, to=${toId}, dir=${direction}`);
+      const newLayout = moveLeaf(activeTab.layout, fromId, toId, direction, cwd);
+      collectLeaves(newLayout).forEach(ensureTerminal);
+      updateActiveTab(newLayout);
     },
-    [activeTab, updateActiveTab, cwd]
+    [activeTab, updateActiveTab, cwd, ensureTerminal]
   );
 
   const handleNewTab = useCallback(() => {
@@ -131,14 +253,15 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
         const idx = prev.findIndex((t) => t.id === tabId);
         if (idx === -1) return prev;
         const leaves = collectLeaves(prev[idx].layout);
-        leaves.forEach((leaf) => socket.closeTerminal(leaf.sessionId));
+        for (const leaf of leaves) {
+          teardownTerminal(leaf.sessionId);
+        }
         const next = prev.filter((t) => t.id !== tabId);
-        if (tabId === activeTabId) {
+        if (tabId === activeTabIdRef.current) {
           const fallback = next[Math.max(0, idx - 1)];
           if (fallback) {
             setActiveTabId(fallback.id);
           } else {
-            // Always keep at least one terminal open.
             const fresh = makeTab(cwd);
             setActiveTabId(fresh.id);
             return [fresh];
@@ -147,18 +270,21 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
         return next;
       });
     },
-    [activeTabId, socket, cwd]
+    [teardownTerminal, cwd]
   );
 
+  // ── Render ────────────────────────────────────────────────────────
   const renderNode = useCallback(
     (node: TerminalLayoutNode): React.ReactNode => {
       if (node.type === "terminal") {
+        const managed = terminalsRef.current.get(node.sessionId);
+        if (!managed) return null;
         return (
           <TerminalPane
             key={node.id}
-            sessionId={node.sessionId}
+            terminal={managed.term}
             cwd={node.cwd}
-            socket={socket}
+            onResize={(cols, rows) => socket.resize(node.sessionId, cols, rows)}
             onSplit={(direction) => handleSplitPane(node.id, direction)}
             onClose={() => handleClosePane(node.id)}
             onFocus={() => handleFocusLeaf(node.id)}
@@ -220,7 +346,11 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
         </div>
         <div className="flex items-center gap-0.5 pr-1 border-r border-white/5">
           <button
-            onClick={() => focusedLeafId && handleSplitPane(focusedLeafId, "horizontal")}
+            onClick={() => {
+              const target = focusedLeafId;
+              console.log(`[TerminalView] Split focused pane right clicked: focusedLeafId=${target}`);
+              if (target) handleSplitPane(target, "horizontal");
+            }}
             disabled={!focusedLeafId}
             className="p-1.5 rounded-md hover:bg-white/5 text-slate-400 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             title="Split focused pane right"
@@ -228,7 +358,11 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
             <SplitSquareHorizontal size={16} />
           </button>
           <button
-            onClick={() => focusedLeafId && handleSplitPane(focusedLeafId, "vertical")}
+            onClick={() => {
+              const target = focusedLeafId;
+              console.log(`[TerminalView] Split focused pane down clicked: focusedLeafId=${target}`);
+              if (target) handleSplitPane(target, "vertical");
+            }}
             disabled={!focusedLeafId}
             className="p-1.5 rounded-md hover:bg-white/5 text-slate-400 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             title="Split focused pane down"

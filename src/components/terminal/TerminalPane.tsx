@@ -2,24 +2,25 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * TerminalPane — a single PTY-backed terminal rendered with xterm.js.
+ * TerminalPane — renders a pre-created xterm Terminal into a host div.
  *
- * Binds to a session id via the shared terminal WebSocket (useTerminalSocket):
- * creates the session on mount, pipes user keystrokes to the backend, writes
- * backend output into the terminal, and reports resize + exit.
+ * This is a "dumb" presentational component. PTY lifecycle and xterm Terminal
+ * creation live in TerminalView so sessions survive tree restructuring (split /
+ * close) without being unmounted by React reconciliation.
  */
 
 import React, { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import "@xterm/xterm/css/xterm.css";
 import { SplitSquareHorizontal, SplitSquareVertical, X } from "lucide-react";
-import type { TerminalSocketApi } from "../../hooks/useTerminalSocket";
 
 interface TerminalPaneProps {
-  sessionId: string;
+  /** Pre-created xterm Terminal instance — owned by the parent. */
+  terminal: Terminal;
+  /** Raw cwd string for the title bar display. */
   cwd?: string;
-  socket: TerminalSocketApi;
+  /** Resize the PTY when the pane dimensions change. */
+  onResize: (cols: number, rows: number) => void;
   onSplit: (direction: "horizontal" | "vertical") => void;
   onClose: () => void;
   onFocus: () => void;
@@ -28,9 +29,9 @@ interface TerminalPaneProps {
 }
 
 export default function TerminalPane({
-  sessionId,
+  terminal,
   cwd,
-  socket,
+  onResize,
   onSplit,
   onClose,
   onFocus,
@@ -38,53 +39,20 @@ export default function TerminalPane({
   onDrop,
 }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const [exited, setExited] = useState<number | null>(null);
+  const openedRef = useRef(false);
   const [isDropTarget, setIsDropTarget] = useState(false);
 
-  // Create the PTY session + wire output once per session id.
-  useEffect(() => {
-    setExited(null);
-    socket.createTerminal(sessionId, cwd, 80, 24);
-    const unsubscribe = socket.subscribe(
-      sessionId,
-      (data) => {
-        termRef.current?.write(data);
-      },
-      (code) => {
-        setExited(code);
-      }
-    );
-    return () => {
-      unsubscribe();
-      socket.closeTerminal(sessionId);
-    };
-  }, [sessionId, cwd, socket]);
-
-  // Initialise xterm once the host element exists.
+  // Mount the xterm Terminal into the host div. The Terminal is created by the
+  // parent and persists across re-renders. We only call term.open() once.
   useEffect(() => {
     const host = hostRef.current;
-    if (!host) return;
+    if (!host || openedRef.current) return;
+    openedRef.current = true;
 
-    const term = new Terminal({
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Code", monospace',
-      fontSize: 13,
-      cursorBlink: true,
-      theme: {
-        background: "#0B0B0C",
-        foreground: "#E4E4E7",
-        cursor: "#10B981",
-        selectionBackground: "#10B98144",
-        black: "#0B0B0C",
-        brightBlack: "#52525B",
-      },
-      allowProposedApi: true,
-    });
     const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(host);
-    termRef.current = term;
+    terminal.loadAddon(fit);
+    terminal.open(host);
     fitRef.current = fit;
 
     try {
@@ -93,12 +61,10 @@ export default function TerminalPane({
       /* element not yet measurable */
     }
 
-    const onData = term.onData((data) => socket.write(sessionId, data));
-
     const ro = new ResizeObserver(() => {
       try {
         fit.fit();
-        socket.resize(sessionId, term.cols, term.rows);
+        onResize(terminal.cols, terminal.rows);
       } catch {
         /* ignore transient measure failures */
       }
@@ -107,18 +73,15 @@ export default function TerminalPane({
 
     return () => {
       ro.disconnect();
-      onData.dispose();
-      term.dispose();
-      termRef.current = null;
       fitRef.current = null;
     };
-  }, [sessionId, socket]);
+  }, [terminal, onResize]);
 
   return (
     <div
       draggable
       onDragStart={(e) => {
-        e.dataTransfer.setData("text/plain", sessionId);
+        e.dataTransfer.setData("text/plain", "drag");
         e.dataTransfer.effectAllowed = "move";
         onDragStart();
       }}
@@ -169,17 +132,6 @@ export default function TerminalPane({
       {/* Terminal host */}
       <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden">
         <div ref={hostRef} className="absolute inset-0 p-1" tabIndex={-1} />
-        {exited !== null && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0B0B0C]/90 text-slate-400 gap-2">
-            <span className="text-xs font-mono">Process exited (code {exited})</span>
-            <button
-              onClick={onClose}
-              className="px-3 py-1 text-xs rounded bg-white/5 hover:bg-white/10 text-slate-200"
-            >
-              Close pane
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

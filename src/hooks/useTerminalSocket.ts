@@ -135,6 +135,7 @@ export function useTerminalSocket(): TerminalSocketApi {
   }, []);
 
   const closeTerminal = useCallback((sessionId: string) => {
+    console.log(`[terminalSocket] closeTerminal: ${sessionId}`, new Error().stack);
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "terminal_close", terminalId: sessionId }));
