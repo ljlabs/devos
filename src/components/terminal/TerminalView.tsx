@@ -11,8 +11,8 @@
  *  - All PTY sessions share one WebSocket via useTerminalSocket.
  */
 
-import React, { useState, useCallback, useMemo } from "react";
-import { Plus, X } from "lucide-react";
+import React, { useState, useCallback, useMemo, useEffect } from "react";
+import { Plus, X, SplitSquareHorizontal, SplitSquareVertical } from "lucide-react";
 import ResizableSplit from "./ResizableSplit";
 import TerminalPane from "./TerminalPane";
 import { useTerminalSocket } from "../../hooks/useTerminalSocket";
@@ -21,6 +21,7 @@ import {
   splitLeaf,
   removeLeaf,
   resizeLeaf,
+  moveLeaf,
   collectLeaves,
   type SplitDirection,
   type TerminalLayoutNode,
@@ -55,11 +56,22 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
   const socket = useTerminalSocket();
   const [tabs, setTabs] = useState<TerminalTab[]>(() => [makeTab(cwd)]);
   const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0].id);
+  const [focusedLeafId, setFocusedLeafId] = useState<string | null>(null);
+  const [draggedLeafId, setDraggedLeafId] = useState<string | null>(null);
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeTabId) ?? tabs[0],
     [tabs, activeTabId]
   );
+
+  // Keep the focused-pane pointer valid as the layout changes.
+  useEffect(() => {
+    const leaves = collectLeaves(activeTab.layout);
+    setFocusedLeafId((prev) => {
+      if (prev && leaves.some((l) => l.id === prev)) return prev;
+      return leaves[0]?.id ?? null;
+    });
+  }, [activeTab]);
 
   const updateActiveTab = useCallback(
     (layout: TerminalLayoutNode) => {
@@ -71,9 +83,14 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
   const handleSplitPane = useCallback(
     (leafId: string, direction: SplitDirection) => {
       updateActiveTab(splitLeaf(activeTab.layout, leafId, direction, cwd));
+      setFocusedLeafId((prev) => prev ?? leafId);
     },
     [activeTab, updateActiveTab, cwd]
   );
+
+  const handleFocusLeaf = useCallback((leafId: string) => {
+    setFocusedLeafId(leafId);
+  }, []);
 
   const handleClosePane = useCallback(
     (leafId: string) => {
@@ -92,6 +109,14 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
       updateActiveTab(resizeLeaf(activeTab.layout, leafId, delta));
     },
     [activeTab, updateActiveTab]
+  );
+
+  const handleMoveLeaf = useCallback(
+    (fromId: string, toId: string, direction: SplitDirection) => {
+      if (fromId === toId) return;
+      updateActiveTab(moveLeaf(activeTab.layout, fromId, toId, direction, cwd));
+    },
+    [activeTab, updateActiveTab, cwd]
   );
 
   const handleNewTab = useCallback(() => {
@@ -130,16 +155,24 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
       if (node.type === "terminal") {
         return (
           <TerminalPane
+            key={node.id}
             sessionId={node.sessionId}
             cwd={node.cwd}
             socket={socket}
             onSplit={(direction) => handleSplitPane(node.id, direction)}
             onClose={() => handleClosePane(node.id)}
+            onFocus={() => handleFocusLeaf(node.id)}
+            onDragStart={() => setDraggedLeafId(node.id)}
+            onDrop={() => {
+              if (draggedLeafId) handleMoveLeaf(draggedLeafId, node.id, "horizontal");
+              setDraggedLeafId(null);
+            }}
           />
         );
       }
       return (
         <ResizableSplit
+          key={node.id}
           direction={node.direction}
           sizes={node.sizes}
           onResize={(delta) => handleResizePane(collectLeaves(node.children[0])[0].id, delta)}
@@ -148,7 +181,7 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
         />
       );
     },
-    [socket, handleSplitPane, handleClosePane, handleResizePane]
+    [socket, handleSplitPane, handleClosePane, handleResizePane, handleFocusLeaf, handleMoveLeaf, draggedLeafId]
   );
 
   return (
@@ -184,6 +217,24 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
               </div>
             );
           })}
+        </div>
+        <div className="flex items-center gap-0.5 pr-1 border-r border-white/5">
+          <button
+            onClick={() => focusedLeafId && handleSplitPane(focusedLeafId, "horizontal")}
+            disabled={!focusedLeafId}
+            className="p-1.5 rounded-md hover:bg-white/5 text-slate-400 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Split focused pane right"
+          >
+            <SplitSquareHorizontal size={16} />
+          </button>
+          <button
+            onClick={() => focusedLeafId && handleSplitPane(focusedLeafId, "vertical")}
+            disabled={!focusedLeafId}
+            className="p-1.5 rounded-md hover:bg-white/5 text-slate-400 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Split focused pane down"
+          >
+            <SplitSquareVertical size={16} />
+          </button>
         </div>
         <button
           onClick={handleNewTab}

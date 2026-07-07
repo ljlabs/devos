@@ -25,8 +25,16 @@ vi.mock("../../src/hooks/useTerminalSocket", () => ({
 }));
 
 vi.mock("../../src/components/terminal/TerminalPane", () => ({
-  default: ({ cwd, onSplit, onClose }: any) => (
-    <div data-testid="terminal-pane" data-cwd={cwd || "~"}>
+  default: ({ cwd, onSplit, onClose, onFocus, onDragStart, onDrop, sessionId }: any) => (
+    <div
+      data-testid="terminal-pane"
+      data-cwd={cwd || "~"}
+      data-session={sessionId}
+      onClick={onFocus}
+      draggable
+      onDragStart={onDragStart}
+      onDrop={onDrop}
+    >
       <button data-testid="split-right" onClick={() => onSplit("horizontal")}>
         Split right
       </button>
@@ -93,5 +101,36 @@ describe("TerminalView", () => {
     // Layout reset to a fresh single pane; the original tab was removed and
     // the view re-seeded with one tab.
     expect(screen.getAllByText(/Terminal \d+/)).toHaveLength(1);
+  });
+
+  it("view-level split button splits the focused pane", () => {
+    render(<TerminalView />);
+    fireEvent.click(screen.getByTestId("split-right")); // → 2 panes
+    expect(screen.getAllByTestId("terminal-pane")).toHaveLength(2);
+
+    // Focus the second pane, then split via the view-level button.
+    const panes = screen.getAllByTestId("terminal-pane");
+    fireEvent.click(panes[1]);
+
+    fireEvent.click(screen.getByTitle("Split focused pane right"));
+    // Focused pane is the one that splits → 3 panes total.
+    expect(screen.getAllByTestId("terminal-pane")).toHaveLength(3);
+  });
+
+  it("dragging a pane onto another relocates it (same session, no copy)", () => {
+    render(<TerminalView />);
+    fireEvent.click(screen.getByTestId("split-right")); // → 2 panes (A, B)
+    const before = screen.getAllByTestId("terminal-pane").map((p) => p.getAttribute("data-session"));
+    expect(before).toHaveLength(2);
+
+    const panes = screen.getAllByTestId("terminal-pane");
+    // Drag pane 0, drop it onto pane 1.
+    fireEvent.dragStart(panes[0]);
+    fireEvent.drop(panes[1]);
+
+    const after = screen.getAllByTestId("terminal-pane").map((p) => p.getAttribute("data-session"));
+    // Relocated, not copied: still two panes, same session ids preserved.
+    expect(after).toHaveLength(2);
+    expect(new Set(after)).toEqual(new Set(before));
   });
 });

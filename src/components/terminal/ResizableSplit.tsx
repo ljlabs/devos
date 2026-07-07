@@ -104,6 +104,7 @@ export default function ResizableSplit({
       <div
         role="separator"
         aria-orientation={isHorizontal ? "vertical" : "horizontal"}
+        draggable={false}
         onPointerDown={onPointerDown}
         className={
           "group relative flex-shrink-0 bg-white/5 hover:bg-emerald-500/40 transition-colors cursor-" +

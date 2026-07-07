@@ -14,6 +14,7 @@ import MobileIdeView from "./MobileIdeView";
 import { WorkspaceModal, SettingsModal } from "./Dialogs";
 import { Workspace, Thread, Message, IdePanel } from "../types";
 import { useWebSocket } from "../hooks/useWebSocket";
+import { installViewportHeightVar } from "../utils/mobileViewport";
 import { useOptimisticMessages } from "../hooks/useOptimisticMessages";
 import { usePaginatedMessages } from "../hooks/usePaginatedMessages";
 

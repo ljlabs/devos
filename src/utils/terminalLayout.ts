@@ -27,6 +27,8 @@ export interface TerminalPaneNode {
 
 export interface SplitNode {
   type: "split";
+  /** Stable id so React can reconcile split nodes across re-renders. */
+  id: string;
   direction: SplitDirection;
   /** Relative sizes of the two children; together they normalise to 1. */
   sizes: [number, number];
@@ -68,6 +70,7 @@ export function splitLeaf(
     const second = makeTerminalPane(cwd ?? root.cwd);
     return {
       type: "split",
+      id: nextPaneId(),
       direction,
       sizes: [0.5, 0.5],
       children: [first, second],
@@ -180,3 +183,54 @@ export function findLeaf(
 export function countLeaves(root: TerminalLayoutNode): number {
   return collectLeaves(root).length;
 }
+
+/**
+ * Move a leaf pane (`fromId`) to become a sibling of another leaf (`toId`),
+ * wrapping `toId` in a new split of `direction`. The moved node keeps its
+ * `id`/`sessionId`, so the underlying PTY is reused, not re-spawned.
+ *
+ * No-op when the ids are equal, when either leaf is missing, or when the move
+ * would empty the tree.
+ */
+export function moveLeaf(
+  root: TerminalLayoutNode,
+  fromId: string,
+  toId: string,
+  direction: SplitDirection,
+  cwd?: string
+): TerminalLayoutNode {
+  if (fromId === toId) return root;
+  const node = findLeaf(root, fromId);
+  const target = findLeaf(root, toId);
+  if (!node || !target) return root;
+
+  const without = removeLeaf(root, fromId);
+  if (without === null) return root; // would empty the tree
+
+  const moved: TerminalPaneNode = { ...node, cwd: cwd ?? node.cwd };
+  const wrap: SplitNode = {
+    type: "split",
+    id: nextPaneId(),
+    direction,
+    sizes: [0.5, 0.5],
+    children: [target, moved],
+  };
+  return replaceLeaf(without, toId, wrap);
+}
+
+/** Replace the leaf with `leafId` by `replacement`, returning a new tree. */
+function replaceLeaf(
+  root: TerminalLayoutNode,
+  leafId: string,
+  replacement: TerminalLayoutNode
+): TerminalLayoutNode {
+  if (root.type === "terminal") {
+    return root.id === leafId ? replacement : root;
+  }
+  const [a, b] = root.children;
+  const newA = replaceLeaf(a, leafId, replacement);
+  const newB = replaceLeaf(b, leafId, replacement);
+  if (newA === a && newB === b) return root;
+  return { ...root, children: [newA, newB] };
+}
+

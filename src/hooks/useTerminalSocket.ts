@@ -17,7 +17,7 @@
  *                    terminal_closed  { terminalId }
  */
 
-import { useRef, useCallback, useEffect } from "react";
+import { useRef, useCallback, useEffect, useMemo } from "react";
 
 type OutputListener = ( string) => void;
 type ExitListener = (exitCode: number) => void;
@@ -167,5 +167,10 @@ export function useTerminalSocket(): TerminalSocketApi {
     []
   );
 
-  return { createTerminal, write, resize, closeTerminal, subscribe };
+  // Stable object identity so consumers' effects don't re-run (and spuriously
+  // tear down PTY sessions) on every parent render.
+  return useMemo(
+    () => ({ createTerminal, write, resize, closeTerminal, subscribe }),
+    [createTerminal, write, resize, closeTerminal, subscribe]
+  );
 }

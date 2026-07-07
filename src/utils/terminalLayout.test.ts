@@ -9,6 +9,7 @@ import {
   splitLeaf,
   removeLeaf,
   resizeLeaf,
+  moveLeaf,
   collectLeaves,
   containsLeaf,
   countLeaves,
@@ -120,4 +121,49 @@ describe("terminalLayout", () => {
     expect(containsLeaf(pane, pane.id)).toBe(true);
     expect(containsLeaf(pane, "nope")).toBe(false);
   });
+
+  it("moveLeaf relocates a pane beside the target, preserving identity", () => {
+    let layout = makeInitialLayout();
+    let id = (layout as any).id as string;
+    layout = splitLeaf(layout, id, "horizontal"); // [A, B]
+    const aId = (layout as any).children[0].id as string;
+    const bId = (layout as any).children[1].id as string;
+
+    const before = findSessionId(layout, aId);
+    const next = moveLeaf(layout, aId, bId, "vertical"); // B wrapped in vertical [., A]
+    expect(countLeaves(next)).toBe(2);
+    expect(findSessionId(next, aId)).toBe(before); // same PTY session reused
+
+    // A is now a descendant of B's wrapping split (vertical).
+    const top = next as any;
+    expect(top.type).toBe("split");
+    expect(top.direction).toBe("vertical");
+    expect(leavesInclude(top, aId)).toBe(true);
+    expect(leavesInclude(top, bId)).toBe(true);
+  });
+
+  it("moveLeaf is a no-op on self or when ids are equal", () => {
+    let layout = makeInitialLayout();
+    let id = (layout as any).id as string;
+    layout = splitLeaf(layout, id, "horizontal");
+    const aId = (layout as any).children[0].id as string;
+    expect(moveLeaf(layout, aId, aId, "horizontal")).toBe(layout);
+  });
+
+  it("moveLeaf never empties the tree", () => {
+    const layout = makeInitialLayout();
+    const id = (layout as any).id as string;
+    expect(moveLeaf(layout, id, id, "horizontal")).toBe(layout);
+  });
 });
+
+function findSessionId(root: any, leafId: string): string | undefined {
+  for (const leaf of collectLeaves(root)) {
+    if (leaf.id === leafId) return leaf.sessionId;
+  }
+  return undefined;
+}
+
+function leavesInclude(root: any, leafId: string): boolean {
+  return collectLeaves(root).some((l) => l.id === leafId);
+}
