@@ -94,6 +94,10 @@ describe("MobileIdeView — keyboard handling", () => {
         value: viewport,
         configurable: true,
       });
+      Object.defineProperty(window, "innerHeight", {
+        value: 768,
+        configurable: true,
+      });
 
       const { container } = renderIde();
       const rootDiv = container.firstChild as HTMLElement;
@@ -105,6 +109,10 @@ describe("MobileIdeView — keyboard handling", () => {
       const viewport = mockVisualViewport(400);
       Object.defineProperty(window, "visualViewport", {
         value: viewport,
+        configurable: true,
+      });
+      Object.defineProperty(window, "innerHeight", {
+        value: 768,
         configurable: true,
       });
 
@@ -119,6 +127,10 @@ describe("MobileIdeView — keyboard handling", () => {
       const viewport = mockVisualViewport(768);
       Object.defineProperty(window, "visualViewport", {
         value: viewport,
+        configurable: true,
+      });
+      Object.defineProperty(window, "innerHeight", {
+        value: 768,
         configurable: true,
       });
 
