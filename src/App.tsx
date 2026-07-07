@@ -15,11 +15,12 @@ import { useOptimisticMessages } from "./hooks/useOptimisticMessages";
 import { usePaginatedMessages } from "./hooks/usePaginatedMessages";
 import IdeRoute from "./routes/IdeRoute";
 import LogsRoute from "./routes/LogsRoute";
+import TerminalRoute from "./routes/TerminalRoute";
 
 let _lastWorkspaceId = "";
 let _lastThreadId = "";
 
-function DesktopShell({ activeView }: { activeView: "threads" | "activity" | "ide" }) {
+function DesktopShell({ activeView }: { activeView: "threads" | "activity" | "ide" | "terminal" }) {
   const { workspaceId, threadId } = useParams<{ workspaceId?: string; threadId?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -129,11 +130,13 @@ function DesktopShell({ activeView }: { activeView: "threads" | "activity" | "id
     }
   };
 
-  const buildViewNav = (view: "threads" | "activity" | "ide") => {
+  const buildViewNav = (view: "threads" | "activity" | "ide" | "terminal") => {
     if (view === "ide") {
       navigate(`/ide/${rememberedWorkspaceId}${rememberedThreadId ? `/${rememberedThreadId}` : ""}`);
     } else if (view === "activity") {
       navigate("/logs");
+    } else if (view === "terminal") {
+      navigate("/terminal");
     } else {
       navigate(`/messages/${rememberedWorkspaceId}${rememberedThreadId ? `/${rememberedThreadId}` : ""}`);
     }
@@ -375,6 +378,9 @@ function DesktopRoutes() {
       </Route>
       <Route element={<DesktopShell activeView="activity" />}>
         <Route path="/logs" element={<LogsRoute />} />
+      </Route>
+      <Route element={<DesktopShell activeView="terminal" />}>
+        <Route path="/terminal" element={<TerminalRoute />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
