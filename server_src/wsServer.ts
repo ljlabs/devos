@@ -254,6 +254,7 @@ export function initWebSocket(
               const client = terminalClients.get(terminalId);
               if (client) sendJson(client, { type: "terminal_exit", terminalId, exitCode });
               terminalClients.delete(terminalId);
+              terminalManager.close(terminalId);
               logInfo("ws", `terminal exited: ${terminalId} (code=${exitCode})`, "global");
             });
             terminalClients.set(terminalId, ws);

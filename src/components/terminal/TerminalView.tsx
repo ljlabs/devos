@@ -77,12 +77,67 @@ interface TerminalViewProps {
   onClose?: () => void;
 }
 
+// ── Session-storage persistence ───────────────────────────────────────────
+// We persist the tabs layout (JSON-serialisable tree of node IDs and cwds)
+// across page refreshes so that pane/tab structure survives, and the stored
+// session IDs are reused — meaning the server's still-running PTYs re-attach
+// on the next terminal_create instead of spawning fresh shells.
+
+const STORAGE_KEY = "devos:terminal-layout";
+
+interface PersistedState {
+  tabs: Array<{ id: string; title: string; layout: TerminalLayoutNode }>;
+  activeTabId: string;
+  tabCounter: number;
+}
+
+function loadPersistedState(): PersistedState | null {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as PersistedState;
+    if (!Array.isArray(data.tabs) || !data.activeTabId) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function saveState(tabs: TerminalTab[], activeTabId: string): void {
+  try {
+    const data: PersistedState = {
+      tabs: tabs.map((t) => ({ id: t.id, title: t.title, layout: t.layout })),
+      activeTabId,
+      tabCounter,
+    };
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    /* storage quota exceeded or SSR — ignore */
+  }
+}
+
 export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
   const socket = useTerminalSocket();
-  const [tabs, setTabs] = useState<TerminalTab[]>(() => [makeTab(cwd)]);
-  const [activeTabId, setActiveTabId] = useState<string>(() => tabs[0].id);
+
+  // Restore persisted tabs/layout from sessionStorage if available, otherwise
+  // start fresh. Reusing the same session IDs means the server's PTYs (which
+  // survive a client disconnect) are re-attached, not re-spawned.
+  const persistedRef = useRef(loadPersistedState());
+  const [tabs, setTabs] = useState<TerminalTab[]>(() => {
+    const saved = persistedRef.current;
+    if (saved) {
+      tabCounter = saved.tabCounter;
+      return saved.tabs;
+    }
+    return [makeTab(cwd)];
+  });
+  const [activeTabId, setActiveTabId] = useState<string>(() => {
+    const saved = persistedRef.current;
+    if (saved) return saved.activeTabId;
+    return tabs[0].id;
+  });
   const [focusedLeafId, setFocusedLeafId] = useState<string | null>(null);
-  const [draggedLeafId, setDraggedLeafId] = useState<string | null>(null);
+  const draggedLeafIdRef = useRef<string | null>(null);
 
   // Managed terminals: Terminal instance + subscribe cleanup, keyed by sessionId.
   const terminalsRef = useRef<Map<string, ManagedTerminal>>(new Map());
@@ -102,6 +157,8 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
   for (const leaf of initialLeaves) {
     if (!terminalsRef.current.has(leaf.sessionId)) {
       const term = new Terminal(TERMINAL_THEME);
+      // Forward user keystrokes to the PTY via the WebSocket
+      term.onData((data: string) => socket.write(leaf.sessionId, data));
       const unsubscribe = socket.subscribe(
         leaf.sessionId,
         (output: string) => term.write(output),
@@ -125,6 +182,8 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
 
       console.log(`[TerminalView] ensureTerminal: creating session ${leaf.sessionId}`);
       const term = new Terminal(TERMINAL_THEME);
+      // Forward user keystrokes to the PTY via the WebSocket
+      term.onData((data: string) => socket.write(leaf.sessionId, data));
       const unsubscribe = socket.subscribe(
         leaf.sessionId,
         (output: string) => term.write(output),
@@ -157,12 +216,12 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
   // 1. Create terminals for any leaf that exists in the layout but has
   //    no managed terminal (handles both initial mount and re-creation
   //    after the same leaf id reappears).
-  // 2. Tear down terminals that are no longer in the layout.
+  // 2. Tear down terminals that are no longer in ANY tab's layout.
   useEffect(() => {
-    const currentLeaves = collectLeaves(activeTab.layout);
-    const currentIds = new Set(currentLeaves.map((l) => l.sessionId));
+    const allLeaves = tabs.flatMap((t) => collectLeaves(t.layout));
+    const currentIds = new Set(allLeaves.map((l) => l.sessionId));
 
-    // Tear down terminals removed from layout.
+    // Tear down terminals removed from all tabs.
     for (const id of knownSessionsRef.current) {
       if (!currentIds.has(id)) {
         teardownTerminal(id);
@@ -171,9 +230,14 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
 
     // Create terminals for leaves not yet managed (covers initial mount
     // and the rare case where the layout is replaced entirely).
-    currentLeaves.forEach(ensureTerminal);
+    allLeaves.forEach(ensureTerminal);
     knownSessionsRef.current = currentIds;
-  }, [activeTab.layout, teardownTerminal, ensureTerminal]);
+  }, [tabs, teardownTerminal, ensureTerminal]);
+
+  // ── Persist layout to sessionStorage ─────────────────────────────
+  useEffect(() => {
+    saveState(tabs, activeTabId);
+  }, [tabs, activeTabId]);
 
   // ── Focus tracking ────────────────────────────────────────────────
   useEffect(() => {
@@ -273,25 +337,64 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
     [teardownTerminal, cwd]
   );
 
+  // Node ID → session ID mapping for stable handler identity
+  const nodeSessionMapRef = useRef<Map<string, string>>(new Map());
+
+  // Stable wrapper for onResize that routes to the correct node
+  // This function's identity doesn't change across renders
+  const stableOnResize = useCallback((nodeId: string, cols: number, rows: number) => {
+    const sessionId = nodeSessionMapRef.current.get(nodeId);
+    if (sessionId) socket.resize(sessionId, cols, rows);
+  }, [socket]);
+
+  // Stable wrapper for onSplit
+  const stableOnSplit = useCallback((nodeId: string, direction: SplitDirection) => {
+    handleSplitPane(nodeId, direction);
+  }, [handleSplitPane]);
+
+  // Stable wrapper for onClose
+  const stableOnClose = useCallback((nodeId: string) => {
+    handleClosePane(nodeId);
+  }, [handleClosePane]);
+
+  // Stable wrapper for onFocus
+  const stableOnFocus = useCallback((nodeId: string) => {
+    handleFocusLeaf(nodeId);
+  }, [handleFocusLeaf]);
+
+  // Per-node onResize handlers, cached to maintain referential equality
+  const nodeOnResizeHandlersRef = useRef<Map<string, (cols: number, rows: number) => void>>(new Map());
+  
+  const getNodeOnResize = useCallback((nodeId: string): ((cols: number, rows: number) => void) => {
+    let handler = nodeOnResizeHandlersRef.current.get(nodeId);
+    if (!handler) {
+      handler = (cols: number, rows: number) => stableOnResize(nodeId, cols, rows);
+      nodeOnResizeHandlersRef.current.set(nodeId, handler);
+    }
+    return handler;
+  }, [stableOnResize]);
+
   // ── Render ────────────────────────────────────────────────────────
   const renderNode = useCallback(
     (node: TerminalLayoutNode): React.ReactNode => {
       if (node.type === "terminal") {
         const managed = terminalsRef.current.get(node.sessionId);
         if (!managed) return null;
+        // Update the mapping for this node's sessionId (used by stable handlers)
+        nodeSessionMapRef.current.set(node.id, node.sessionId);
         return (
           <TerminalPane
             key={node.id}
             terminal={managed.term}
             cwd={node.cwd}
-            onResize={(cols, rows) => socket.resize(node.sessionId, cols, rows)}
-            onSplit={(direction) => handleSplitPane(node.id, direction)}
-            onClose={() => handleClosePane(node.id)}
-            onFocus={() => handleFocusLeaf(node.id)}
-            onDragStart={() => setDraggedLeafId(node.id)}
+            onResize={getNodeOnResize(node.id)}
+            onSplit={(direction) => stableOnSplit(node.id, direction)}
+            onClose={() => stableOnClose(node.id)}
+            onFocus={() => stableOnFocus(node.id)}
+            onDragStart={() => { draggedLeafIdRef.current = node.id; }}
             onDrop={() => {
-              if (draggedLeafId) handleMoveLeaf(draggedLeafId, node.id, "horizontal");
-              setDraggedLeafId(null);
+              if (draggedLeafIdRef.current) handleMoveLeaf(draggedLeafIdRef.current, node.id, "horizontal");
+              draggedLeafIdRef.current = null;
             }}
           />
         );
@@ -307,7 +410,7 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
         />
       );
     },
-    [socket, handleSplitPane, handleClosePane, handleResizePane, handleFocusLeaf, handleMoveLeaf, draggedLeafId]
+    [getNodeOnResize, stableOnSplit, stableOnClose, stableOnFocus, handleResizePane, handleMoveLeaf]
   );
 
   return (

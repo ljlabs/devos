@@ -174,4 +174,61 @@ describe("Terminal WebSocket integration", () => {
     ws1.close();
     ws2.close();
   });
+
+  // --- Bug #4: an exited PTY must be closed server-side, not left as a zombie
+  // A later reconnect to the same id should spawn a fresh shell, not route to
+  // a dead session. We assert the exit handler triggers a terminal_manager
+  // close (pty.kill) and that a second create re-spawns the PTY (new onData).
+  it("closes the PTY on exit so a later reconnect re-spawns a fresh shell", async () => {
+    const ws = await connectWs(port);
+    ws.send(JSON.stringify({ type: "terminal_create", terminalId: "t7", cols: 80, rows: 24 }));
+    await waitForMessage(ws, "terminal_created");
+
+    // Simulate the PTY exiting (server emits terminal_exit and should release
+    // the session so it isn't a zombie).
+    mockOnExitCb({ exitCode: 0 });
+    const exitMsg = await waitForMessage(ws, "terminal_exit");
+    expect(exitMsg.terminalId).toBe("t7");
+    // The session must be torn down on exit, not left lingering.
+    expect(mockPtyKill).toHaveBeenCalled();
+
+    // A reconnect to the same terminalId must re-create a live PTY rather than
+    // silently routing output to a dead session.
+    const ws2 = await connectWs(port);
+    mockPtyWrite.mockClear();
+    ws2.send(JSON.stringify({ type: "terminal_create", terminalId: "t7", cols: 80, rows: 24 }));
+    await waitForMessage(ws2, "terminal_created");
+    ws2.send(JSON.stringify({ type: "terminal_data", terminalId: "t7", data: "echo hi\n" }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockPtyWrite).toHaveBeenCalledWith("echo hi\n");
+
+    ws.close();
+    ws2.close();
+  });
+
+  // --- Bug #3: live session must survive a transient socket disconnect
+  // When the client WS drops, the server should detach output routing but keep
+  // the PTY alive, so a reconnect re-wires (re-attaches) the live session.
+  it("keeps the PTY alive across a client disconnect so a reconnect re-attaches", async () => {
+    const ws1 = await connectWs(port);
+    ws1.send(JSON.stringify({ type: "terminal_create", terminalId: "t8", cols: 80, rows: 24 }));
+    await waitForMessage(ws1, "terminal_created");
+
+    // Client drops (e.g. transient network blip). The PTY must NOT be killed.
+    ws1.close();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockPtyKill).not.toHaveBeenCalled();
+
+    // Reconnect on a fresh socket; the live session is re-wired (not re-spawned
+    // as a new shell), and terminal output flows to the new client.
+    mockPtyWrite.mockClear();
+    const ws2 = await connectWs(port);
+    ws2.send(JSON.stringify({ type: "terminal_create", terminalId: "t8", cols: 80, rows: 24 }));
+    await waitForMessage(ws2, "terminal_created");
+    ws2.send(JSON.stringify({ type: "terminal_data", terminalId: "t8", data: "whoami\n" }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockPtyWrite).toHaveBeenCalledWith("whoami\n");
+
+    ws2.close();
+  });
 });

@@ -17,9 +17,9 @@
  *                    terminal_closed  { terminalId }
  */
 
-import { useRef, useCallback, useEffect, useMemo } from "react";
+import { useRef, useCallback, useEffect, useMemo, useState } from "react";
 
-type OutputListener = ( string) => void;
+type OutputListener = (string) => void;
 type ExitListener = (exitCode: number) => void;
 
 export interface TerminalSocketApi {
@@ -36,6 +36,9 @@ export function useTerminalSocket(): TerminalSocketApi {
   const pendingRef = useRef<Record<string, { cwd?: string; cols: number; rows: number }>>({});
   const outputListeners = useRef<Map<string, Set<OutputListener>>>(new Map());
   const exitListeners = useRef<Map<string, Set<ExitListener>>>(new Map());
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const [, setReconnectTrigger] = useState(0); // force re-render on reconnect
 
   const connect = useCallback(() => {
     if (connectedRef.current) return;
@@ -46,6 +49,7 @@ export function useTerminalSocket(): TerminalSocketApi {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      reconnectAttemptsRef.current = 0; // reset on successful connect
       // Re-create any sessions requested before the socket finished opening.
       const pending = pendingRef.current;
       pendingRef.current = {};
@@ -88,10 +92,18 @@ export function useTerminalSocket(): TerminalSocketApi {
     ws.onclose = () => {
       connectedRef.current = false;
       wsRef.current = null;
+
+      // Auto-reconnect with exponential backoff (max ~30s)
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+      reconnectAttemptsRef.current += 1;
+      reconnectTimeoutRef.current = window.setTimeout(() => {
+        setReconnectTrigger((n) => n + 1); // trigger reconnect
+      }, delay);
     };
 
     ws.onerror = () => {
-      // onclose handles reconnect-free teardown; nothing to do here.
+      // onclose handles reconnect; nothing to do here.
     };
   }, []);
 

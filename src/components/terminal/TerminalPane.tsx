@@ -12,7 +12,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { SplitSquareHorizontal, SplitSquareVertical, X } from "lucide-react";
+import { GripVertical, SplitSquareHorizontal, SplitSquareVertical, X } from "lucide-react";
 
 interface TerminalPaneProps {
   /** Pre-created xterm Terminal instance — owned by the parent. */
@@ -43,17 +43,46 @@ export default function TerminalPane({
   const openedRef = useRef(false);
   const [isDropTarget, setIsDropTarget] = useState(false);
 
-  // Mount the xterm Terminal into the host div. The Terminal is created by the
-  // parent and persists across re-renders. We only call term.open() once.
+  // Mount (or re-mount) the xterm Terminal into the host div.
+  //
+  // React reconciliation: when a pane splits, the TerminalPane component moves
+  // to a different position in the tree (new parent = ResizableSplit). React
+  // unmounts and remounts the component even when the key is the same, because
+  // the parent changed. When this happens the Terminal instance is already
+  // open (terminal.element is set). Rather than calling open() again (which
+  // corrupts the instance), we move the existing DOM element into the new host
+  // and re-attach the FitAddon + ResizeObserver.
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || openedRef.current) return;
-    openedRef.current = true;
+    if (!host) return;
 
-    const fit = new FitAddon();
-    terminal.loadAddon(fit);
-    terminal.open(host);
-    fitRef.current = fit;
+    let fit: FitAddon;
+
+    if (terminal.element && host.contains(terminal.element)) {
+      // Already correctly mounted in this host — just make sure we have a fit addon.
+      fit = fitRef.current ?? new FitAddon();
+      if (!fitRef.current) {
+        terminal.loadAddon(fit);
+        fitRef.current = fit;
+      }
+    } else if (terminal.element) {
+      // Terminal was opened into a different host (parent changed after split).
+      // Move the xterm DOM element and re-use it in the new host.
+      host.appendChild(terminal.element);
+      fit = new FitAddon();
+      terminal.loadAddon(fit);
+      fitRef.current = fit;
+      console.log("[TerminalPane] re-attached xterm element to new host", host);
+    } else {
+      // First open.
+      fit = new FitAddon();
+      terminal.loadAddon(fit);
+      terminal.open(host);
+      fitRef.current = fit;
+      console.log("[TerminalPane] opened xterm on host", host);
+    }
+
+    openedRef.current = true;
 
     try {
       fit.fit();
@@ -61,9 +90,12 @@ export default function TerminalPane({
       /* element not yet measurable */
     }
 
+    // Focus so the newly mounted/remounted pane is immediately typeable.
+    terminal.focus();
+
     const ro = new ResizeObserver(() => {
       try {
-        fit.fit();
+        fitRef.current?.fit();
         onResize(terminal.cols, terminal.rows);
       } catch {
         /* ignore transient measure failures */
@@ -73,18 +105,18 @@ export default function TerminalPane({
 
     return () => {
       ro.disconnect();
-      fitRef.current = null;
     };
   }, [terminal, onResize]);
 
+  // Focus the terminal when the pane is clicked anywhere (except the drag handle).
+  const handlePaneClick = () => {
+    console.log("[TerminalPane] pane clicked — focusing xterm");
+    onFocus();
+    terminal.focus();
+  };
+
   return (
     <div
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData("text/plain", "drag");
-        e.dataTransfer.effectAllowed = "move";
-        onDragStart();
-      }}
       onDragOver={(e) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
@@ -96,31 +128,41 @@ export default function TerminalPane({
         setIsDropTarget(false);
         onDrop();
       }}
-      onClick={onFocus}
       className={`flex flex-col w-full h-full bg-[#0B0B0C] min-w-0 min-h-0 outline-none ${
         isDropTarget ? "ring-2 ring-emerald-500/70" : ""
       }`}
     >
-      {/* Pane title bar */}
-      <div className="flex items-center justify-between h-7 px-2 bg-[#111114] border-b border-white/5 text-slate-400 select-none">
-        <span className="text-[11px] font-mono truncate">{cwd || "~"}</span>
+      {/* Pane title bar — draggable handle only */}
+      <div
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData("text/plain", "drag");
+          e.dataTransfer.effectAllowed = "move";
+          onDragStart();
+        }}
+        className="flex items-center justify-between h-7 px-2 bg-[#111114] border-b border-white/5 text-slate-400 select-none cursor-grab active:cursor-grabbing"
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          <GripVertical size={12} className="shrink-0 opacity-40" />
+          <span className="text-[11px] font-mono truncate">{cwd || "~"}</span>
+        </div>
         <div className="flex items-center gap-0.5">
           <button
-            onClick={() => onSplit("horizontal")}
+            onClick={(e) => { e.stopPropagation(); onSplit("horizontal"); }}
             className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-colors"
             title="Split right"
           >
             <SplitSquareHorizontal size={14} />
           </button>
           <button
-            onClick={() => onSplit("vertical")}
+            onClick={(e) => { e.stopPropagation(); onSplit("vertical"); }}
             className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-colors"
             title="Split down"
           >
             <SplitSquareVertical size={14} />
           </button>
           <button
-            onClick={onClose}
+            onClick={(e) => { e.stopPropagation(); onClose(); }}
             className="p-1 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors"
             title="Close pane"
           >
@@ -129,9 +171,12 @@ export default function TerminalPane({
         </div>
       </div>
 
-      {/* Terminal host */}
-      <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden">
-        <div ref={hostRef} className="absolute inset-0 p-1" tabIndex={-1} />
+      {/* Terminal host — click anywhere here to focus xterm */}
+      <div
+        className="relative flex-1 min-h-0 min-w-0 overflow-hidden"
+        onClick={handlePaneClick}
+      >
+        <div ref={hostRef} className="absolute inset-0 p-1" />
       </div>
     </div>
   );
