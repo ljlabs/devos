@@ -14,3 +14,15 @@ if (typeof ResizeObserver === "undefined") {
     disconnect() {}
   };
 }
+
+// Polyfill navigator.clipboard — not available in jsdom
+if (typeof navigator !== "undefined" && !navigator.clipboard) {
+  Object.defineProperty(navigator, "clipboard", {
+    value: {
+      writeText: vi.fn().mockResolvedValue(undefined),
+      readText: vi.fn().mockResolvedValue(""),
+    },
+    writable: true,
+    configurable: true,
+  });
+}

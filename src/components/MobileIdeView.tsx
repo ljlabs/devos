@@ -11,6 +11,7 @@ import { ArrowLeft } from "lucide-react";
 import { IdePanel, FileEntry, FileContent, Workspace } from "../types";
 import FileEditorPanel from "./ide/FileEditorPanel";
 import FilesPanel from "./ide/FilesPanel";
+import { installViewportHeightVar, isKeyboardOpen as checkKeyboardOpen, onViewportChange } from "../utils/mobileViewport";
 
 interface MobileIdeViewProps {
   panel: IdePanel;
@@ -39,6 +40,13 @@ export default function MobileIdeView({
   const [isSaving, setIsSaving] = useState(false);
   const [workspacePath, setWorkspacePath] = useState<string>("");
   const [headerExpanded, setHeaderExpanded] = useState(false);
+  const [isKeyboardOpen, setIsKeyboardOpen] = useState(() => {
+    try {
+      return window.visualViewport ? checkKeyboardOpen() : false;
+    } catch {
+      return false;
+    }
+  });
 
   // Fetch workspace path
   useEffect(() => {
@@ -51,6 +59,16 @@ export default function MobileIdeView({
       })
       .catch(() => {});
   }, [workspaceId]);
+
+  // Install visual viewport CSS variables and track keyboard state
+  useEffect(() => {
+    const cleanup = installViewportHeightVar();
+    const unsub = onViewportChange(setIsKeyboardOpen);
+    return () => {
+      cleanup();
+      unsub();
+    };
+  }, []);
 
   const fetchDirectory = useCallback(async (relativePath?: string) => {
     if (!workspaceId) return;
@@ -270,6 +288,8 @@ export default function MobileIdeView({
     }
   }, [workspaceId, panel, fetchDirectory]);
 
+
+
   const getHeaderTitle = () => {
     switch (panel) {
       case "files": return "Explorer";
@@ -279,7 +299,7 @@ export default function MobileIdeView({
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#0B0B0C]">
+    <div className="flex flex-col h-full bg-[#0B0B0C] overflow-hidden" style={{ position: 'fixed', inset: `0px calc(var(--keyboard-inset, 0px)) ${isKeyboardOpen ? 0 : 56}px 0px` }}>
       {/* Panel header */}
       <div className="flex items-center gap-3 px-3 h-12 border-b border-white/5 bg-[#0E0E11] flex-shrink-0">
         <button
@@ -342,8 +362,6 @@ export default function MobileIdeView({
         />
       )}
 
-      {/* Bottom padding for nav bar */}
-      <div className="h-14 flex-shrink-0" />
-    </div>
+          </div>
   );
 }

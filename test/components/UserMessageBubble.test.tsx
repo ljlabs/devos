@@ -6,44 +6,40 @@ import { UserMessageBubble } from "../../src/components/shared/UserMessageBubble
 const SAMPLE_CONTENT = "Hello, this is a test message from the user.";
 const SAMPLE_TIMESTAMP = new Date(2025, 5, 15, 14, 34).toISOString(); // Jun 15, 2025 2:34 PM
 
-// jsdom has no navigator.clipboard. We mock CopyButton to test its rendering
-// and content prop, and test clipboard behavior via the mock.
-const handleCopyMock = vi.fn();
-let copiedState = false;
-
-vi.mock("../../src/components/CopyButton", () => ({
-  default: function MockCopyButton({ content }: { content: string }) {
-    return (
-      <button
-        onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(content);
-            copiedState = true;
-            handleCopyMock(content);
-            setTimeout(() => { copiedState = false; }, 2000);
-          } catch {
-            // silent
-          }
-        }}
-      >
-        {copiedState ? "Copied!" : "Copy"}
-      </button>
-    );
-  },
-}));
-
-// Clipboard mock
+// Clipboard mock — exposed for test assertions
 const clipboardWriteText = vi.fn().mockResolvedValue(undefined);
+
+// Mock CopyButton — mirrors real CopyButton's useState behavior
+const handleCopyMock = vi.fn();
+
+vi.mock("../../src/components/CopyButton", () => {
+  const React = require("react");
+  return {
+    default: ({ content }: { content: string }) => {
+      const [copied, setCopied] = React.useState(false);
+      return (
+        <button
+          onClick={async () => {
+            try {
+              await clipboardWriteText(content);
+              setCopied(true);
+              handleCopyMock(content);
+              setTimeout(() => setCopied(false), 2000);
+            } catch (err) {
+              console.error("Failed to copy:", err);
+            }
+          }}
+        >
+          {copied ? "Copied!" : "Copy"}
+        </button>
+      );
+    },
+  };
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
-  copiedState = false;
-
-  Object.defineProperty(navigator, "clipboard", {
-    value: { writeText: clipboardWriteText },
-    writable: true,
-    configurable: true,
-  });
+  clipboardWriteText.mockResolvedValue(undefined);
 });
 
 describe("UserMessageBubble", () => {
@@ -187,6 +183,7 @@ describe("UserMessageBubble", () => {
       await user.click(screen.getByRole("button", { name: /copy/i }));
 
       expect(consoleSpy).toHaveBeenCalledWith("Failed to copy:", expect.any(Error));
+      consoleSpy.mockRestore();
     });
   });
 
@@ -288,7 +285,6 @@ describe("UserMessageBubble", () => {
   describe("Scroll gesture compatibility", () => {
     it("CopyButton wrapper has select-none in desktop", () => {
       render(<UserMessageBubble content={SAMPLE_CONTENT} timestamp={SAMPLE_TIMESTAMP} />);
-      // CopyButton is inside div.mt-1, which is a sibling of the bubble
       const copyBtn = screen.getByRole("button", { name: /copy/i });
       const wrapper = copyBtn.closest(".mt-1");
       expect(wrapper).not.toBeNull();
@@ -297,8 +293,7 @@ describe("UserMessageBubble", () => {
     it("CopyButton wrapper is positioned beside bubble in mobile", () => {
       render(<UserMessageBubble content={SAMPLE_CONTENT} timestamp={SAMPLE_TIMESTAMP} compact />);
       const copyBtn = screen.getByRole("button", { name: /copy/i });
-      const wrapper = copyBtn.closest(".flex.items-end");
-      expect(wrapper).not.toBeNull();
+      expect(copyBtn.closest(".flex.items-end")).not.toBeNull();
     });
   });
 });

@@ -15,7 +15,8 @@ import {
   FileText,
   HelpCircle,
   Menu,
-  Code
+  Code,
+  TerminalSquare
 } from "lucide-react";
 import { Workspace } from "../types";
 
@@ -26,8 +27,8 @@ interface WorkspaceSidebarProps {
   onOpenNewWorkspace: () => void;
   onEditWorkspace: (id: string) => void;
   onDeleteWorkspace: (id: string) => void;
-  activeView: 'threads' | 'activity' | 'ide';
-  onSelectView: (view: 'threads' | 'activity' | 'ide') => void;
+  activeView: 'threads' | 'activity' | 'ide' | 'terminal';
+  onSelectView: (view: 'threads' | 'activity' | 'ide' | 'terminal') => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
   onOpenSettings: () => void;
@@ -168,6 +169,18 @@ export default function WorkspaceSidebar({
             >
               <Code size={16} className={activeView === 'ide' ? "text-emerald-400" : "text-slate-500"} />
               {!collapsed && <span className="text-sm font-sans">IDE</span>}
+            </button>
+
+            <button
+              onClick={() => onSelectView('terminal')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all ${
+                activeView === 'terminal'
+                  ? "bg-emerald-500/5 border border-emerald-500/20 text-white font-medium"
+                  : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+              }`}
+            >
+              <TerminalSquare size={16} className={activeView === 'terminal' ? "text-emerald-400" : "text-slate-500"} />
+              {!collapsed && <span className="text-sm font-sans">Terminal</span>}
             </button>
 
           </nav>

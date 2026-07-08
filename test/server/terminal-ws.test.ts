@@ -174,4 +174,68 @@ describe("Terminal WebSocket integration", () => {
     ws1.close();
     ws2.close();
   });
+
+  // --- Bug #4: an exited PTY must be closed server-side, not left as a zombie
+  // A later reconnect to the same id should spawn a fresh shell, not route to
+  // a dead session. We assert the exit handler triggers a terminal_manager
+  // close (pty.kill) and that a second create re-spawns the PTY (new onData).
+  it("closes the PTY on exit so a later reconnect re-spawns a fresh shell", async () => {
+    const ws = await connectWs(port);
+    ws.send(JSON.stringify({ type: "terminal_create", terminalId: "t7", cols: 80, rows: 24 }));
+    await waitForMessage(ws, "terminal_created");
+
+    // Simulate the PTY exiting (server emits terminal_exit and should release
+    // the session so it isn't a zombie).
+    mockOnExitCb({ exitCode: 0 });
+    const exitMsg = await waitForMessage(ws, "terminal_exit");
+    expect(exitMsg.terminalId).toBe("t7");
+    // The session must be torn down on exit, not left lingering.
+    expect(mockPtyKill).toHaveBeenCalled();
+
+    // A reconnect to the same terminalId must re-create a live PTY rather than
+    // silently routing output to a dead session.
+    const ws2 = await connectWs(port);
+    mockPtyWrite.mockClear();
+    ws2.send(JSON.stringify({ type: "terminal_create", terminalId: "t7", cols: 80, rows: 24 }));
+    await waitForMessage(ws2, "terminal_created");
+    ws2.send(JSON.stringify({ type: "terminal_data", terminalId: "t7", data: "echo hi\n" }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockPtyWrite).toHaveBeenCalledWith("echo hi\n");
+
+    ws.close();
+    ws2.close();
+  });
+
+  // --- Terminal history: on reconnect, server sends previous output
+  // so the client's buffer is restored and the history isn't lost.
+  it("replays terminal history on reconnect so buffer is restored", async () => {
+    const ws1 = await connectWs(port);
+    ws1.send(JSON.stringify({ type: "terminal_create", terminalId: "t9", cols: 80, rows: 24 }));
+    await waitForMessage(ws1, "terminal_created");
+
+    // Simulate PTY sending output (the onData callback from the mock).
+    mockOnDataCb("$ ls\n");
+    mockOnDataCb("file1.txt  file2.txt\n");
+    mockOnDataCb("$ ");
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Client disconnects (e.g., page refresh).
+    ws1.close();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // New client connects to the same terminal.
+    const ws2 = await connectWs(port);
+    ws2.send(JSON.stringify({ type: "terminal_create", terminalId: "t9", cols: 80, rows: 24 }));
+    const msg = await waitForMessage(ws2, "terminal_created");
+
+    // terminal_created should include the history so the client can restore it.
+    expect(msg.history).toBeDefined();
+    expect(Array.isArray(msg.history)).toBe(true);
+    expect(msg.history.length).toBe(3);
+    expect(msg.history[0]).toBe("$ ls\n");
+    expect(msg.history[1]).toBe("file1.txt  file2.txt\n");
+    expect(msg.history[2]).toBe("$ ");
+
+    ws2.close();
+  });
 });
