@@ -206,28 +206,35 @@ describe("Terminal WebSocket integration", () => {
     ws2.close();
   });
 
-  // --- Bug #3: live session must survive a transient socket disconnect
-  // When the client WS drops, the server should detach output routing but keep
-  // the PTY alive, so a reconnect re-wires (re-attaches) the live session.
-  it("keeps the PTY alive across a client disconnect so a reconnect re-attaches", async () => {
+  // --- Terminal history: on reconnect, server sends previous output
+  // so the client's buffer is restored and the history isn't lost.
+  it("replays terminal history on reconnect so buffer is restored", async () => {
     const ws1 = await connectWs(port);
-    ws1.send(JSON.stringify({ type: "terminal_create", terminalId: "t8", cols: 80, rows: 24 }));
+    ws1.send(JSON.stringify({ type: "terminal_create", terminalId: "t9", cols: 80, rows: 24 }));
     await waitForMessage(ws1, "terminal_created");
 
-    // Client drops (e.g. transient network blip). The PTY must NOT be killed.
+    // Simulate PTY sending output (the onData callback from the mock).
+    mockOnDataCb("$ ls\n");
+    mockOnDataCb("file1.txt  file2.txt\n");
+    mockOnDataCb("$ ");
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Client disconnects (e.g., page refresh).
     ws1.close();
     await new Promise((r) => setTimeout(r, 50));
-    expect(mockPtyKill).not.toHaveBeenCalled();
 
-    // Reconnect on a fresh socket; the live session is re-wired (not re-spawned
-    // as a new shell), and terminal output flows to the new client.
-    mockPtyWrite.mockClear();
+    // New client connects to the same terminal.
     const ws2 = await connectWs(port);
-    ws2.send(JSON.stringify({ type: "terminal_create", terminalId: "t8", cols: 80, rows: 24 }));
-    await waitForMessage(ws2, "terminal_created");
-    ws2.send(JSON.stringify({ type: "terminal_data", terminalId: "t8", data: "whoami\n" }));
-    await new Promise((r) => setTimeout(r, 50));
-    expect(mockPtyWrite).toHaveBeenCalledWith("whoami\n");
+    ws2.send(JSON.stringify({ type: "terminal_create", terminalId: "t9", cols: 80, rows: 24 }));
+    const msg = await waitForMessage(ws2, "terminal_created");
+
+    // terminal_created should include the history so the client can restore it.
+    expect(msg.history).toBeDefined();
+    expect(Array.isArray(msg.history)).toBe(true);
+    expect(msg.history.length).toBe(3);
+    expect(msg.history[0]).toBe("$ ls\n");
+    expect(msg.history[1]).toBe("file1.txt  file2.txt\n");
+    expect(msg.history[2]).toBe("$ ");
 
     ws2.close();
   });

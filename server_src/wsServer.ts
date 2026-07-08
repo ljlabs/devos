@@ -235,7 +235,9 @@ export function initWebSocket(
           if (terminalManager.has(terminalId)) {
             terminalClients.set(terminalId, ws);
             logInfo("ws", `terminal reconnected: ${terminalId}`, "global");
-            sendJson(ws, { type: "terminal_created", terminalId });
+            // Send history so the client can restore the buffer
+            const history = terminalManager.getHistory(terminalId);
+            sendJson(ws, { type: "terminal_created", terminalId, history });
             break;
           }
 
@@ -247,6 +249,8 @@ export function initWebSocket(
           const session = terminalManager.get(terminalId);
           if (session) {
             session.pty.onData((data: string) => {
+              // Record output in history for future reconnects
+              terminalManager.recordOutput(terminalId, data);
               const client = terminalClients.get(terminalId);
               if (client) sendJson(client, { type: "terminal_output", terminalId, data });
             });

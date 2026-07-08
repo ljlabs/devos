@@ -21,6 +21,7 @@ import { useRef, useCallback, useEffect, useMemo, useState } from "react";
 
 type OutputListener = (string) => void;
 type ExitListener = (exitCode: number) => void;
+type HistoryListener = (history: string[]) => void;
 
 export interface TerminalSocketApi {
   createTerminal: (sessionId: string, cwd?: string, cols?: number, rows?: number) => void;
@@ -28,6 +29,8 @@ export interface TerminalSocketApi {
   resize: (sessionId: string, cols: number, rows: number) => void;
   closeTerminal: (sessionId: string) => void;
   subscribe: (sessionId: string, onData: OutputListener, onExit: ExitListener) => () => void;
+  /** Subscribe to history replay on reconnect. */
+  onHistory: (sessionId: string, listener: HistoryListener) => () => void;
 }
 
 export function useTerminalSocket(): TerminalSocketApi {
@@ -36,6 +39,7 @@ export function useTerminalSocket(): TerminalSocketApi {
   const pendingRef = useRef<Record<string, { cwd?: string; cols: number; rows: number }>>({});
   const outputListeners = useRef<Map<string, Set<OutputListener>>>(new Map());
   const exitListeners = useRef<Map<string, Set<ExitListener>>>(new Map());
+  const historyListeners = useRef<Map<string, Set<HistoryListener>>>(new Map());
   const reconnectTimeoutRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const [, setReconnectTrigger] = useState(0); // force re-render on reconnect
@@ -74,6 +78,14 @@ export function useTerminalSocket(): TerminalSocketApi {
         return;
       }
       switch (msg.type) {
+        case "terminal_created": {
+          // On reconnect, server may send history to restore the buffer
+          if (msg.history && Array.isArray(msg.history)) {
+            const set = historyListeners.current.get(msg.terminalId);
+            if (set) set.forEach((fn) => fn(msg.history as string[]));
+          }
+          break;
+        }
         case "terminal_output": {
           const set = outputListeners.current.get(msg.terminalId);
           if (set) set.forEach((fn) => fn(msg.data as string));
@@ -180,10 +192,26 @@ export function useTerminalSocket(): TerminalSocketApi {
     []
   );
 
+  const onHistory = useCallback(
+    (sessionId: string, listener: HistoryListener) => {
+      let set = historyListeners.current.get(sessionId);
+      if (!set) {
+        set = new Set();
+        historyListeners.current.set(sessionId, set);
+      }
+      set.add(listener);
+
+      return () => {
+        historyListeners.current.get(sessionId)?.delete(listener);
+      };
+    },
+    []
+  );
+
   // Stable object identity so consumers' effects don't re-run (and spuriously
   // tear down PTY sessions) on every parent render.
   return useMemo(
-    () => ({ createTerminal, write, resize, closeTerminal, subscribe }),
-    [createTerminal, write, resize, closeTerminal, subscribe]
+    () => ({ createTerminal, write, resize, closeTerminal, subscribe, onHistory }),
+    [createTerminal, write, resize, closeTerminal, subscribe, onHistory]
   );
 }

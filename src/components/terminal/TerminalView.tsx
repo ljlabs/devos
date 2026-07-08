@@ -234,6 +234,30 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
     knownSessionsRef.current = currentIds;
   }, [tabs, teardownTerminal, ensureTerminal]);
 
+  // ── History replay on reconnect ──────────────────────────────────
+  // Subscribe each terminal to history replay so reconnects restore the buffer.
+  useEffect(() => {
+    const allLeaves = tabs.flatMap((t) => collectLeaves(t.layout));
+    const unsubscribers: (() => void)[] = [];
+
+    for (const leaf of allLeaves) {
+      const managed = terminalsRef.current.get(leaf.sessionId);
+      if (managed) {
+        const unsubscribe = socket.onHistory(leaf.sessionId, (history: string[]) => {
+          console.log(`[TerminalView] replaying ${history.length} history chunks for ${leaf.sessionId}`);
+          for (const chunk of history) {
+            managed.term.write(chunk);
+          }
+        });
+        unsubscribers.push(unsubscribe);
+      }
+    }
+
+    return () => {
+      for (const unsub of unsubscribers) unsub();
+    };
+  }, [tabs, socket]);
+
   // ── Persist layout to sessionStorage ─────────────────────────────
   useEffect(() => {
     saveState(tabs, activeTabId);

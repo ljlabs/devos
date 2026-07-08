@@ -26,6 +26,7 @@ const { mockSocket, capturedOnResize } = vi.hoisted(() => ({
     resize: vi.fn(),
     closeTerminal: vi.fn(),
     subscribe: vi.fn(() => () => {}),
+    onHistory: vi.fn(() => () => {}),
   },
   // Captures the onResize prop passed to every TerminalPane render so tests
   // can assert closure identity stability across renders (Bug #5).
@@ -44,9 +45,11 @@ beforeEach(() => {
   mockSocket.write.mockClear();
   mockSocket.resize.mockClear();
   mockSocket.closeTerminal.mockClear();
-  // subscribe returns a cleanup fn — restore that default after clearing.
+  // subscribe and onHistory return cleanup fns — restore that default after clearing.
   mockSocket.subscribe.mockClear();
   mockSocket.subscribe.mockReturnValue(() => {});
+  mockSocket.onHistory.mockClear();
+  mockSocket.onHistory.mockReturnValue(() => {});
 });
 
 vi.mock("@xterm/xterm", () => ({
