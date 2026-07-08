@@ -114,6 +114,39 @@ export function removeLeaf(
 }
 
 /**
+ * Adjust the relative size of a split node identified by its own `splitId`.
+ * `delta` is applied to the first child and subtracted from the second,
+ * clamped so neither side drops below `min`.
+ *
+ * Replaces `resizeLeaf` (which was ambiguous when multiple splits share a leaf
+ * on the path to the root).
+ */
+export function resizeSplit(
+  root: TerminalLayoutNode,
+  splitId: string,
+  delta: number,
+  min = 0.1
+): TerminalLayoutNode {
+  if (root.type === "terminal") return root;
+
+  if (root.id === splitId) {
+    const clampedDelta = clampDelta(root.sizes, true, delta, min);
+    if (clampedDelta === 0) return root;
+    const sizes: [number, number] = [
+      root.sizes[0] + clampedDelta,
+      root.sizes[1] - clampedDelta,
+    ];
+    return { ...root, sizes };
+  }
+
+  const [a, b] = root.children;
+  const newA = resizeSplit(a, splitId, delta, min);
+  const newB = resizeSplit(b, splitId, delta, min);
+  if (newA === a && newB === b) return root;
+  return { ...root, children: [newA, newB] };
+}
+
+/**
  * Adjust the relative size of one child of a split that contains `leafId`.
  * `delta` is a fraction (e.g. 0.03) added to the target side and subtracted
  * from its sibling, clamped so neither side drops below `min`.

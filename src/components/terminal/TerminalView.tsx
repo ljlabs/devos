@@ -24,15 +24,13 @@ import {
   makeInitialLayout,
   splitLeaf,
   removeLeaf,
-  resizeLeaf,
+  resizeSplit,
   moveLeaf,
   collectLeaves,
   type SplitDirection,
   type TerminalLayoutNode,
   type TerminalPaneNode,
-} from "../../utils/terminalLayout";
-
-const TERMINAL_THEME = {
+} from "../../utils/terminalLayout";const TERMINAL_THEME = {
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Code", monospace',
   fontSize: 13,
   cursorBlink: true,
@@ -312,8 +310,8 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
   );
 
   const handleResizePane = useCallback(
-    (leafId: string, delta: number) => {
-      updateActiveTab(resizeLeaf(activeTab.layout, leafId, delta));
+    (splitId: string, delta: number) => {
+      updateActiveTab(resizeSplit(activeTab.layout, splitId, delta));
     },
     [activeTab, updateActiveTab]
   );
@@ -428,7 +426,7 @@ export default function TerminalView({ cwd, onClose }: TerminalViewProps) {
           key={node.id}
           direction={node.direction}
           sizes={node.sizes}
-          onResize={(delta) => handleResizePane(collectLeaves(node.children[0])[0].id, delta)}
+          onResize={(delta) => handleResizePane(node.id, delta)}
           first={renderNode(node.children[0])}
           second={renderNode(node.children[1])}
         />
