@@ -288,11 +288,7 @@ export default function MobileIdeView({
     }
   }, [workspaceId, panel, fetchDirectory]);
 
-  // Install visual viewport CSS variables and handle cleanup
-  useEffect(() => {
-    const cleanup = installViewportHeightVar();
-    return cleanup;
-  }, []);
+
 
   const getHeaderTitle = () => {
     switch (panel) {

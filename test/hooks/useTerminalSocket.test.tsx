@@ -74,7 +74,11 @@ describe("useTerminalSocket", () => {
   it("sends terminal_data when write() is called (Bug #1 — input path)", async () => {
     const { result, ws } = await mountHook();
 
-    act(() => { result.current.write("sess-1", "ls\n"); });
+    await act(async () => {
+      result.current.write("sess-1", "ls\n");
+      // Wait for microtasks to flush so onopen fires and message is sent
+      await new Promise((r) => setTimeout(r, 0));
+    });
 
     const expected = wire({
       type: "terminal_data",

@@ -72,14 +72,12 @@ export default function TerminalPane({
       fit = new FitAddon();
       terminal.loadAddon(fit);
       fitRef.current = fit;
-      console.log("[TerminalPane] re-attached xterm element to new host", host);
     } else {
       // First open.
       fit = new FitAddon();
       terminal.loadAddon(fit);
       terminal.open(host);
       fitRef.current = fit;
-      console.log("[TerminalPane] opened xterm on host", host);
     }
 
     openedRef.current = true;
@@ -110,7 +108,6 @@ export default function TerminalPane({
 
   // Focus the terminal when the pane is clicked anywhere (except the drag handle).
   const handlePaneClick = () => {
-    console.log("[TerminalPane] pane clicked — focusing xterm");
     onFocus();
     terminal.focus();
   };

@@ -19,13 +19,13 @@
 
 import { useRef, useCallback, useEffect, useMemo, useState } from "react";
 
-type OutputListener = (string) => void;
+type OutputListener = (data: string) => void;
 type ExitListener = (exitCode: number) => void;
 type HistoryListener = (history: string[]) => void;
 
 export interface TerminalSocketApi {
   createTerminal: (sessionId: string, cwd?: string, cols?: number, rows?: number) => void;
-  write: (sessionId: string,  string) => void;
+  write: (sessionId: string, data: string) => void;
   resize: (sessionId: string, cols: number, rows: number) => void;
   closeTerminal: (sessionId: string) => void;
   subscribe: (sessionId: string, onData: OutputListener, onExit: ExitListener) => () => void;
@@ -42,98 +42,105 @@ export function useTerminalSocket(): TerminalSocketApi {
   const historyListeners = useRef<Map<string, Set<HistoryListener>>>(new Map());
   const reconnectTimeoutRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
-  const [, setReconnectTrigger] = useState(0); // force re-render on reconnect
+  // Ref for the connect function so reconnect timeout can call the latest version
+  const connectRef = useRef<() => void>(() => {});
 
-  const connect = useCallback(() => {
-    if (connectedRef.current) return;
-    connectedRef.current = true;
+  // Create the actual connect logic that will be stored in connectRef
+  useEffect(() => {
+    const connect = () => {
+      if (connectedRef.current) return;
+      connectedRef.current = true;
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-    wsRef.current = ws;
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+      wsRef.current = ws;
 
-    ws.onopen = () => {
-      reconnectAttemptsRef.current = 0; // reset on successful connect
-      // Re-create any sessions requested before the socket finished opening.
-      const pending = pendingRef.current;
-      pendingRef.current = {};
-      Object.entries(pending).forEach(([id, cfg]) => {
-        ws.send(
-          JSON.stringify({
-            type: "terminal_create",
-            terminalId: id,
-            cwd: cfg.cwd,
-            cols: cfg.cols,
-            rows: cfg.rows,
-          })
-        );
-      });
-    };
+      ws.onopen = () => {
+        reconnectAttemptsRef.current = 0; // reset on successful connect
+        // Re-create any sessions requested before the socket finished opening.
+        const pending = pendingRef.current;
+        pendingRef.current = {};
+        Object.entries(pending).forEach(([id, cfg]) => {
+          ws.send(
+            JSON.stringify({
+              type: "terminal_create",
+              terminalId: id,
+              cwd: cfg.cwd,
+              cols: cfg.cols,
+              rows: cfg.rows,
+            })
+          );
+        });
+      };
 
-    ws.onmessage = (event) => {
-      let msg: Record<string, any>;
-      try {
-        msg = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-      switch (msg.type) {
-        case "terminal_created": {
-          // On reconnect, server may send history to restore the buffer
-          if (msg.history && Array.isArray(msg.history)) {
-            const set = historyListeners.current.get(msg.terminalId);
-            if (set) set.forEach((fn) => fn(msg.history as string[]));
+      ws.onmessage = (event) => {
+        let msg: Record<string, any>;
+        try {
+          msg = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        switch (msg.type) {
+          case "terminal_created": {
+            // On reconnect, server may send history to restore the buffer
+            if (msg.history && Array.isArray(msg.history)) {
+              const set = historyListeners.current.get(msg.terminalId);
+              if (set) set.forEach((fn) => fn(msg.history as string[]));
+            }
+            break;
           }
-          break;
+          case "terminal_output": {
+            const set = outputListeners.current.get(msg.terminalId);
+            if (set) set.forEach((fn) => fn(msg.data as string));
+            break;
+          }
+          case "terminal_exit": {
+            const set = exitListeners.current.get(msg.terminalId);
+            if (set) set.forEach((fn) => fn(msg.exitCode as number));
+            break;
+          }
+          default:
+            break;
         }
-        case "terminal_output": {
-          const set = outputListeners.current.get(msg.terminalId);
-          if (set) set.forEach((fn) => fn(msg.data as string));
-          break;
-        }
-        case "terminal_exit": {
-          const set = exitListeners.current.get(msg.terminalId);
-          if (set) set.forEach((fn) => fn(msg.exitCode as number));
-          break;
-        }
-        default:
-          break;
-      }
+      };
+
+      ws.onclose = () => {
+        connectedRef.current = false;
+        wsRef.current = null;
+
+        // Auto-reconnect with exponential backoff (max ~30s)
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+        reconnectAttemptsRef.current += 1;
+        reconnectTimeoutRef.current = window.setTimeout(() => {
+          connect(); // Recursive call to reconnect
+        }, delay);
+      };
+
+      ws.onerror = () => {
+        // onclose handles reconnect; nothing to do here.
+      };
     };
 
-    ws.onclose = () => {
+    connectRef.current = connect;
+  }, []);
+
+  // Connect on mount
+  useEffect(() => {
+    connectRef.current();
+    return () => {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === 1) ws.close();
       connectedRef.current = false;
       wsRef.current = null;
-
-      // Auto-reconnect with exponential backoff (max ~30s)
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-      const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
-      reconnectAttemptsRef.current += 1;
-      reconnectTimeoutRef.current = window.setTimeout(() => {
-        setReconnectTrigger((n) => n + 1); // trigger reconnect
-      }, delay);
-    };
-
-    ws.onerror = () => {
-      // onclose handles reconnect; nothing to do here.
     };
   }, []);
 
-  useEffect(() => {
-    connect();
-    return () => {
-      const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) ws.close();
-      connectedRef.current = false;
-      wsRef.current = null;
-    };
-  }, [connect]);
-
   const createTerminal = useCallback(
     (sessionId: string, cwd?: string, cols = 80, rows = 24) => {
-      connect();
+      connectRef.current();
       const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === 1) {
         ws.send(
           JSON.stringify({ type: "terminal_create", terminalId: sessionId, cwd, cols, rows })
         );
@@ -141,27 +148,27 @@ export function useTerminalSocket(): TerminalSocketApi {
         pendingRef.current[sessionId] = { cwd, cols, rows };
       }
     },
-    [connect]
+    []
   );
 
   const write = useCallback((sessionId: string, data: string) => {
+    connectRef.current();
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (ws && ws.readyState === 1) {
       ws.send(JSON.stringify({ type: "terminal_data", terminalId: sessionId, data }));
     }
   }, []);
 
   const resize = useCallback((sessionId: string, cols: number, rows: number) => {
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (ws && ws.readyState === 1) {
       ws.send(JSON.stringify({ type: "terminal_resize", terminalId: sessionId, cols, rows }));
     }
   }, []);
 
   const closeTerminal = useCallback((sessionId: string) => {
-    console.log(`[terminalSocket] closeTerminal: ${sessionId}`, new Error().stack);
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (ws && ws.readyState === 1) {
       ws.send(JSON.stringify({ type: "terminal_close", terminalId: sessionId }));
     }
     outputListeners.current.delete(sessionId);
