@@ -27,10 +27,13 @@ import {
   resizeSplit,
   moveLeaf,
   collectLeaves,
+  updateLeaf,
   type SplitDirection,
   type TerminalLayoutNode,
   type TerminalPaneNode,
-} from "../../utils/terminalLayout";const TERMINAL_THEME = {
+} from "../../utils/terminalLayout";
+
+const TERMINAL_THEME = {
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Code", monospace',
   fontSize: 13,
   cursorBlink: true,
@@ -165,7 +168,18 @@ export default function TerminalView({ cwd }: TerminalViewProps) {
           // PTY exited
         }
       );
-      terminalsRef.current.set(leaf.sessionId, { term, unsubscribe });
+      // Track live CWD changes from the backend. The setTabs call below
+      // updates the layout node's cwd (persisting across refreshes) and
+      // re-renders, so the title bar reflects the new directory.
+      const unsubCwd = socket.onCwd(leaf.sessionId, (newCwd: string) => {
+        setTabs((prev) =>
+          prev.map((t) => ({
+            ...t,
+            layout: updateLeaf(t.layout, leaf.id, { cwd: newCwd }),
+          }))
+        );
+      });
+      terminalsRef.current.set(leaf.sessionId, { term, unsubscribe: () => { unsubscribe(); unsubCwd(); } });
       socket.createTerminal(leaf.sessionId, leaf.cwd, 80, 24);
       knownSessionsRef.current.add(leaf.sessionId);
     },
@@ -298,6 +312,18 @@ export default function TerminalView({ cwd }: TerminalViewProps) {
     [activeTab, updateActiveTab, cwd, ensureTerminal]
   );
 
+  const handleRename = useCallback(
+    (leafId: string, name: string | null) => {
+      setTabs((prev) =>
+        prev.map((t) => ({
+          ...t,
+          layout: updateLeaf(t.layout, leafId, { displayName: name ?? undefined }),
+        }))
+      );
+    },
+    []
+  );
+
   const handleNewTab = useCallback(() => {
     const tab = makeTab(cwd);
     setTabs((prev) => [...prev, tab]);
@@ -392,6 +418,8 @@ export default function TerminalView({ cwd }: TerminalViewProps) {
             key={node.id}
             terminal={managed.term}
             cwd={node.cwd}
+            displayName={node.displayName}
+            onRename={(name) => handleRename(node.id, name)}
             onResize={getNodeOnResize(node.id)}
             onSplit={(direction) => stableOnSplit(node.id, direction)}
             onClose={() => stableOnClose(node.id)}

@@ -18,8 +18,6 @@ A modern, open-source development environment for building and iterating with AI
 
 **SQLite** (auto-created as `devos.db`)
 
-From JSON? Run: `npx tsx scripts/migrate-db.ts`
-
 See **[docs/SQLITE_REFERENCE.md](./docs/SQLITE_REFERENCE.md)** for schema, testing, and troubleshooting.
 
 ## Architecture
@@ -128,8 +126,6 @@ devos/
 │   ├── SQLITE_REFERENCE.md
 │   ├── QUICK_REFERENCE.md
 │   └── UI_RENDERING_GUIDE.md
-├── scripts/
-│   └── migrate-db.ts         # JSON→SQLite
 ├── devos.db                  # Database (auto-created)
 └── package.json
 ```

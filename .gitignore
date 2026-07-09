@@ -9,3 +9,4 @@ coverage/
 sandbox_workspaces/*
 db.json
 **/*.db*
+.mimocode/*

@@ -4,19 +4,15 @@ DevOS uses SQLite for persistence (auto-created as `devos.db`).
 
 ## Migration
 
-If you have existing `db.json`:
-```bash
-npx tsx scripts/migrate-db.ts
-```
-
-This migrates workspaces, threads, messages, and patterns to SQLite.
+DevOS uses SQLite directly (auto-created as `devos.db`). The JSON-to-SQLite
+migration script was removed when the database layer switched to SQLite; no
+migration step is required for new installs.
 
 ## Architecture
 
 **Files**:
 - `devos.db` - SQLite database
 - `server_src/db.sqlite.ts` - Database layer
-- `scripts/migrate-db.ts` - Migration script
 
 **Schema**:
 ```

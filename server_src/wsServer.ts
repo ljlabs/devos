@@ -11,8 +11,9 @@ import { WebSocketServer as WSServer, WebSocket } from "ws";
 import type { Server } from "http";
 import type { Message, Thread } from "../src/types";
 import { logInfo } from "../src/logger";
-import { terminalManager } from "./terminal";
+import { terminalManager, CWD_MARKER_RE, parseCwdMarkers, stripCwdMarkers, CwdMarkerStream } from "./terminal";
 import os from "os";
+
 
 // ---------------------------------------------------------------------------
 // Subscription tracking
@@ -248,21 +249,48 @@ export function initWebSocket(
           // Wire PTY output back to this WebSocket client
           const session = terminalManager.get(terminalId);
           if (session) {
+            // Streaming CWD-marker parser: buffers partial markers across
+            // PTY data chunks so raw ESC bytes never leak to xterm.js.
+            const cwdStream = new CwdMarkerStream();
+
             session.pty.onData((data: string) => {
-              // Record output in history for future reconnects
-              terminalManager.recordOutput(terminalId, data);
+              const { clean, cwds } = cwdStream.push(data);
+
+              // Record clean output (markers stripped) in history for reconnect replay.
+              terminalManager.recordOutput(terminalId, clean);
+
               const client = terminalClients.get(terminalId);
-              if (client) sendJson(client, { type: "terminal_output", terminalId, data });
+
+              // Forward CWD changes detected from the shell prompt hook.
+              for (const cwd of cwds) {
+                if (client) sendJson(client, { type: "terminal_cwd", terminalId, cwd });
+              }
+
+              if (client && clean) {
+                sendJson(client, { type: "terminal_output", terminalId, data: clean });
+              }
             });
             session.pty.onExit(({ exitCode }: { exitCode: number }) => {
               const client = terminalClients.get(terminalId);
               if (client) sendJson(client, { type: "terminal_exit", terminalId, exitCode });
               terminalClients.delete(terminalId);
+              terminalManager.stopCwdPolling(terminalId);
               terminalManager.close(terminalId);
               logInfo("ws", `terminal exited: ${terminalId} (code=${exitCode})`, "global");
             });
             terminalClients.set(terminalId, ws);
           }
+
+          // On Windows, the prompt hook writes CWD to a temp file instead of
+          // using OSC 9;9 escape sequences (which xterm.js handles badly).
+          // Start polling that file so we can send terminal_cwd messages.
+          if (terminalManager.getShell().command === "powershell.exe") {
+            terminalManager.startCwdPolling(terminalId, (cwd) => {
+              const client = terminalClients.get(terminalId);
+              if (client) sendJson(client, { type: "terminal_cwd", terminalId, cwd });
+            });
+          }
+
           sendJson(ws, { type: "terminal_created", terminalId });
           break;
         }
@@ -293,6 +321,7 @@ export function initWebSocket(
             sendJson(ws, { type: "error", message: "terminalId required" });
             return;
           }
+          terminalManager.stopCwdPolling(terminalId);
           terminalManager.close(terminalId);
           terminalClients.delete(terminalId);
           sendJson(ws, { type: "terminal_closed", terminalId });

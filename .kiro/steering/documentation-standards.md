@@ -109,12 +109,9 @@ Good (minimal):
 ```markdown
 # SQLite Database
 
-**Migration**: `npx tsx scripts/migrate-db.ts`
-
 **Files**:
 - `devos.db` - Database (auto-created)
 - `db.sqlite.ts` - Layer implementation
-- `scripts/migrate-db.ts` - Migration script
 
 **Schema**: 4 tables (workspaces, threads, messages, allowedPatterns)
 FK: threads→workspaces, messages→threads, ON DELETE CASCADE

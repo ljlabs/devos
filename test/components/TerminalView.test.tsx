@@ -13,7 +13,7 @@
  * mocked so this runs under jsdom.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import React from "react";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { Terminal } from "@xterm/xterm";
@@ -27,6 +27,7 @@ const { mockSocket, capturedOnResize } = vi.hoisted(() => ({
     closeTerminal: vi.fn(),
     subscribe: vi.fn(() => () => {}),
     onHistory: vi.fn(() => () => {}),
+    onCwd: vi.fn(() => () => {}),
   },
   // Captures the onResize prop passed to every TerminalPane render so tests
   // can assert closure identity stability across renders (Bug #5).
@@ -39,7 +40,7 @@ beforeEach(() => {
   sessionStorage.clear();
   // Clear the xterm Terminal constructor mock history so index-based lookups
   // in tests (e.g. Terminal.mock.results[0]) always reference the current test.
-  (Terminal as unknown as vi.Mock).mockClear();
+  (Terminal as unknown as Mock).mockClear();
   // Clear call history without wiping implementations.
   mockSocket.createTerminal.mockClear();
   mockSocket.write.mockClear();
@@ -50,6 +51,8 @@ beforeEach(() => {
   mockSocket.subscribe.mockReturnValue(() => {});
   mockSocket.onHistory.mockClear();
   mockSocket.onHistory.mockReturnValue(() => {});
+  mockSocket.onCwd.mockClear();
+  mockSocket.onCwd.mockReturnValue(() => {});
 });
 
 vi.mock("@xterm/xterm", () => ({
@@ -197,7 +200,7 @@ describe("TerminalView", () => {
 
     // The single initial pane's Terminal registered an onData handler that
     // forwards keystrokes to the socket's `write` for that session.
-    const term = (Terminal as unknown as vi.Mock).mock.results[0].value as any;
+    const term = (Terminal as unknown as Mock).mock.results[0].value as any;
     const onData = term.onData.mock.calls[0][0];
     expect(typeof onData).toBe("function");
 
@@ -217,7 +220,7 @@ describe("TerminalView", () => {
 
     // Drive onData for the second-created session and confirm it routes to
     // the socket with the matching sessionId.
-    const terms = (Terminal as unknown as vi.Mock).mock.results;
+    const terms = (Terminal as unknown as Mock).mock.results;
     const secondTerm = terms[1].value as any;
     const onData = secondTerm.onData.mock.calls[0][0];
 

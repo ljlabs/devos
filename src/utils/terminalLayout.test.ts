@@ -10,6 +10,7 @@ import {
   removeLeaf,
   resizeLeaf,
   moveLeaf,
+  updateLeaf,
   collectLeaves,
   containsLeaf,
   countLeaves,
@@ -154,6 +155,43 @@ describe("terminalLayout", () => {
     const layout = makeInitialLayout();
     const id = (layout as any).id as string;
     expect(moveLeaf(layout, id, id, "horizontal")).toBe(layout);
+  });
+
+  it("updateLeaf changes cwd on the target leaf", () => {
+    let layout = makeInitialLayout("/work");
+    const id = (layout as any).id as string;
+    const updated = updateLeaf(layout, id, { cwd: "/new" });
+    expect(updated).not.toBe(layout);
+    if (updated.type === "terminal") {
+      expect(updated.cwd).toBe("/new");
+    }
+  });
+
+  it("updateLeaf changes displayName on the target leaf", () => {
+    let layout = makeInitialLayout("/work");
+    const id = (layout as any).id as string;
+    const updated = updateLeaf(layout, id, { displayName: "server" });
+    if (updated.type === "terminal") {
+      expect(updated.displayName).toBe("server");
+      expect(updated.cwd).toBe("/work"); // cwd unchanged
+    }
+  });
+
+  it("updateLeaf is a no-op when leaf not found", () => {
+    const layout = makeInitialLayout("/work");
+    expect(updateLeaf(layout, "does-not-exist", { cwd: "/new" })).toBe(layout);
+  });
+
+  it("updateLeaf works on a nested tree", () => {
+    let layout = makeInitialLayout();
+    let id = (layout as any).id as string;
+    layout = splitLeaf(layout, id, "horizontal");
+    const leftId = (layout as any).children[0].id as string;
+    const updated = updateLeaf(layout, leftId, { displayName: "tests" });
+    expect(updated).not.toBe(layout);
+    const left = (updated as any).children[0];
+    expect(left.displayName).toBe("tests");
+    expect(left.cwd).toBeUndefined();
   });
 });
 

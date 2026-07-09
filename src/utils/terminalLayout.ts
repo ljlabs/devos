@@ -23,6 +23,8 @@ export interface TerminalPaneNode {
   sessionId: string;
   /** CWD the PTY should start in. */
   cwd?: string;
+  /** User-set display name (overrides cwd in title bar). */
+  displayName?: string;
 }
 
 export interface SplitNode {
@@ -67,7 +69,7 @@ export function splitLeaf(
   if (root.type === "terminal") {
     if (root.id !== leafId) return root;
     const first: TerminalPaneNode = { ...root };
-    const second = makeTerminalPane(cwd ?? root.cwd);
+    const second = makeTerminalPane(root.cwd ?? cwd);
     return {
       type: "split",
       id: nextPaneId(),
@@ -205,6 +207,27 @@ export function collectLeaves(root: TerminalLayoutNode): TerminalPaneNode[] {
   return [...collectLeaves(root.children[0]), ...collectLeaves(root.children[1])];
 }
 
+/**
+ * Immutably update fields on a leaf node by id.
+ * Returns a new tree, or the same tree if the leaf was not found.
+ */
+export function updateLeaf(
+  root: TerminalLayoutNode,
+  leafId: string,
+  patch: Partial<Pick<TerminalPaneNode, "cwd" | "displayName">>
+): TerminalLayoutNode {
+  if (root.type === "terminal") {
+    if (root.id !== leafId) return root;
+    return { ...root, ...patch };
+  }
+
+  const [a, b] = root.children;
+  const newA = updateLeaf(a, leafId, patch);
+  const newB = updateLeaf(b, leafId, patch);
+  if (newA === a && newB === b) return root;
+  return { ...root, children: [newA, newB] };
+}
+
 export function findLeaf(
   root: TerminalLayoutNode,
   leafId: string
@@ -240,7 +263,7 @@ export function moveLeaf(
   const without = removeLeaf(root, fromId);
   if (without === null) return root; // would empty the tree
 
-  const moved: TerminalPaneNode = { ...node, cwd: cwd ?? node.cwd };
+  const moved: TerminalPaneNode = { ...node, cwd: node.cwd ?? cwd };
   const wrap: SplitNode = {
     type: "split",
     id: nextPaneId(),

@@ -282,7 +282,7 @@ Compared to JSON:
 - [x] Linter passes (`npm run lint`)
 - [x] Tests pass (`npm run test`)
 - [x] Build optimized (`npm run build`)
-- [x] Database migrations work (`scripts/migrate-db.ts`)
+- [x] Database auto-creates on first run (`devos.db` via SQLite)
 - [x] No secrets in code (`.env` excluded)
 - [x] Git hooks configured for pre-commit validation
 

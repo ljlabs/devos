@@ -9,7 +9,7 @@
  * close) without being unmounted by React reconciliation.
  */
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { GripVertical, SplitSquareHorizontal, SplitSquareVertical, X } from "lucide-react";
@@ -19,6 +19,10 @@ interface TerminalPaneProps {
   terminal: Terminal;
   /** Raw cwd string for the title bar display. */
   cwd?: string;
+  /** User-set display name (overrides cwd in title bar). */
+  displayName?: string;
+  /** Called when the user renames the pane. Pass null to clear. */
+  onRename: (name: string | null) => void;
   /** Resize the PTY when the pane dimensions change. */
   onResize: (cols: number, rows: number) => void;
   onSplit: (direction: "horizontal" | "vertical") => void;
@@ -31,6 +35,8 @@ interface TerminalPaneProps {
 export default function TerminalPane({
   terminal,
   cwd,
+  displayName,
+  onRename,
   onResize,
   onSplit,
   onClose,
@@ -42,6 +48,9 @@ export default function TerminalPane({
   const fitRef = useRef<FitAddon | null>(null);
   const openedRef = useRef(false);
   const [isDropTarget, setIsDropTarget] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Mount (or re-mount) the xterm Terminal into the host div.
   //
@@ -106,6 +115,28 @@ export default function TerminalPane({
     };
   }, [terminal, onResize]);
 
+
+  const startEditing = useCallback(() => {
+    setEditValue(displayName || cwd || "");
+    setIsEditing(true);
+  }, [displayName, cwd]);
+
+  const commitEdit = useCallback(() => {
+    if (!isEditing) return;
+    setIsEditing(false);
+    const trimmed = editValue.trim() || null;
+    onRename(trimmed);
+  }, [isEditing, editValue, onRename]);
+
+  const cancelEdit = useCallback(() => {
+    setIsEditing(false);
+  }, []);
+
+  // Focus input when editing starts
+  useEffect(() => {
+    if (isEditing) inputRef.current?.select();
+  }, [isEditing]);
+
   // Focus the terminal when the pane is clicked anywhere (except the drag handle).
   const handlePaneClick = () => {
     onFocus();
@@ -141,7 +172,28 @@ export default function TerminalPane({
       >
         <div className="flex items-center gap-1.5 min-w-0">
           <GripVertical size={12} className="shrink-0 opacity-40" />
-          <span className="text-[11px] font-mono truncate">{cwd || "~"}</span>
+          {isEditing ? (
+            <input
+              ref={inputRef}
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitEdit();
+                if (e.key === "Escape") cancelEdit();
+              }}
+              onBlur={commitEdit}
+              className="text-[11px] font-mono bg-white/5 border border-white/10 rounded px-1 py-0 outline-none text-white min-w-0"
+              autoFocus
+            />
+          ) : (
+            <span
+              draggable="false"
+              className="text-[11px] font-mono truncate cursor-pointer hover:text-white transition-colors"
+              onDoubleClick={startEditing}
+            >
+              {displayName || cwd || "~"}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-0.5">
           <button

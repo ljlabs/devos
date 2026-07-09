@@ -8,7 +8,6 @@ Migrated DevOS from JSON (`db.json`) to SQLite (`devos.db`).
 
 **New**:
 - `server_src/db.sqlite.ts` - Database layer (200 lines, 24 unit tests)
-- `scripts/migrate-db.ts` - Migration script
 - `docs/SQLITE_REFERENCE.md` - Database reference
 
 **Modified**:
@@ -52,8 +51,6 @@ Cascade deletion, type handling, large datasets all tested.
 ## Usage
 
 **New users**: Database created automatically
-
-**Existing users**: `npx tsx scripts/migrate-db.ts`
 
 See `docs/SQLITE_REFERENCE.md` for details.
 

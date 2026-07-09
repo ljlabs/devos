@@ -20,6 +20,12 @@ function makeOutputEvent(id: string, payload: string): Record<string, any> {
   return evt;
 }
 
+function makeCwdEvent(id: string, cwd: string): Record<string, any> {
+  const evt: Record<string, any> = {};
+  evt[P.k] = wire({ type: "terminal_cwd", terminalId: id, cwd });
+  return evt;
+}
+
 // Capture all WebSocket instances created during the test.
 let wsInstances: FakeWs[] = [];
 
@@ -139,5 +145,30 @@ describe("useTerminalSocket", () => {
 
     // After a transient disconnect, the hook should have retried the connection.
     expect(wsInstances.length).toBeGreaterThan(countAfterMount);
+  });
+
+  it("routes terminal_cwd to the onCwd subscriber", async () => {
+    const { result, ws } = await mountHook();
+
+    const onCwd = vi.fn();
+    act(() => { result.current.onCwd("sess-4", onCwd); });
+
+    act(() => { ws.onmessage?.(makeCwdEvent("sess-4", "/home/user/src")); });
+
+    expect(onCwd).toHaveBeenCalledWith("/home/user/src");
+  });
+
+  it("onCwd subscriber can unsubscribe", async () => {
+    const { result, ws } = await mountHook();
+
+    const onCwd = vi.fn();
+    let unsub: () => void;
+    act(() => { unsub = result.current.onCwd("sess-5", onCwd); });
+
+    act(() => { unsub(); });
+
+    act(() => { ws.onmessage?.(makeCwdEvent("sess-5", "/tmp")); });
+
+    expect(onCwd).not.toHaveBeenCalled();
   });
 });
