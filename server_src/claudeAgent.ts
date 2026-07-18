@@ -38,6 +38,33 @@ import fs from "fs";
 import { logInfo, logError } from "../src/logger";
 
 // ---------------------------------------------------------------------------
+// Denied tools — Claude Code CLI tools that are irrelevant or conflicting
+// in the DevOS context (DevOS has its own workflow engine, plan mode, file
+// browser, terminal, etc.). Passed to the ACP adapter via disallowedTools.
+// ---------------------------------------------------------------------------
+
+const DENIED_TOOLS = [
+  "WebSearch",
+  "AskUserQuestion",
+  "Workflow",
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "EnterWorktree",
+  "ExitWorktree",
+  "NotebookEdit",
+  "PushNotification",
+  "RemoteTrigger",
+  "ReportFindings",
+  "ScheduleWakeup",
+  "CronCreate",
+  "CronDelete",
+  "CronList",
+  "Artifact",
+  "SendUserFile",
+  "ShareOnboardingGuide",
+];
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -283,6 +310,13 @@ export class ClaudeAgent extends EventEmitter {
           sessionId,
           cwd: this.workspacePath,
           mcpServers: [],
+          _meta: {
+            claudeCode: {
+              options: {
+                disallowedTools: DENIED_TOOLS,
+              },
+            },
+          },
         });
       } finally {
         this.suppressEmit = false;
@@ -300,6 +334,13 @@ export class ClaudeAgent extends EventEmitter {
       cwd: this.workspacePath,
       mcpServers: [],
       permissionMode: "default",
+      _meta: {
+        claudeCode: {
+          options: {
+            disallowedTools: DENIED_TOOLS,
+          },
+        },
+      },
     }) as { sessionId: string };
 
     logInfo("acp", `session/new OK, sessionId=${result.sessionId}`, this.threadId);
