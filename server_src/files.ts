@@ -46,7 +46,6 @@ const EXCLUDE_PATTERNS = [
  * Check if a basename should be excluded from listings.
  */
 function isExcluded(name: string): boolean {
-  if (name.startsWith(".")) return true; // hidden files/dirs
   return EXCLUDE_PATTERNS.includes(name);
 }
 

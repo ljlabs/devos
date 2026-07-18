@@ -139,6 +139,9 @@ export default function TerminalView({ cwd }: TerminalViewProps) {
   const [focusedLeafId, setFocusedLeafId] = useState<string | null>(null);
   const draggedLeafIdRef = useRef<string | null>(null);
 
+  // Buffered PTY output per session, accumulated before xterm opens.
+  const ptyBufferRef = useRef<Map<string, string[]>>(new Map());
+
   // Managed terminals: Terminal instance + subscribe cleanup, keyed by sessionId.
   const terminalsRef = useRef<Map<string, ManagedTerminal>>(new Map());
   // Set of sessionIds that have already been created — prevents double-create
@@ -159,11 +162,21 @@ export default function TerminalView({ cwd }: TerminalViewProps) {
       if (terminalsRef.current.has(leaf.sessionId)) return;
 
       const term = new Terminal(TERMINAL_THEME);
+      const buffer: string[] = [];
+      ptyBufferRef.current.set(leaf.sessionId, buffer);
       // Forward user keystrokes to the PTY via the WebSocket
       term.onData((data: string) => socket.write(leaf.sessionId, data));
+      // Subscribe to PTY output immediately, but buffer until xterm opens
       const unsubscribe = socket.subscribe(
         leaf.sessionId,
-        (output: string) => term.write(output),
+        (output: string) => {
+          const managed = terminalsRef.current.get(leaf.sessionId);
+          if (managed?.term.element) {
+            managed.term.write(output);
+          } else {
+            buffer.push(output);
+          }
+        },
         (exitCode: number) => {
           // PTY exited
         }
@@ -193,6 +206,7 @@ export default function TerminalView({ cwd }: TerminalViewProps) {
       if (!managed) return;
       managed.unsubscribe();
       terminalsRef.current.delete(sessionId);
+      ptyBufferRef.current.delete(sessionId);
       socket.closeTerminal(sessionId);
       managed.term.dispose();
     },
@@ -220,6 +234,22 @@ export default function TerminalView({ cwd }: TerminalViewProps) {
     allLeaves.forEach(ensureTerminal);
     knownSessionsRef.current = currentIds;
   }, [tabs, teardownTerminal, ensureTerminal]);
+
+  // ── Drain buffered PTY output after xterm opens ────────────────────
+  // PTY data may arrive before xterm's DOM element is ready. The ensureTerminal
+  // callback buffers it; this effect flushes once xterm.element is set.
+  useEffect(() => {
+    for (const [id, buffer] of ptyBufferRef.current) {
+      if (buffer.length === 0) continue;
+      const managed = terminalsRef.current.get(id);
+      if (managed?.term.element) {
+        for (const chunk of buffer) {
+          managed.term.write(chunk);
+        }
+        buffer.length = 0;
+      }
+    }
+  });
 
   // ── History replay on reconnect ──────────────────────────────────
   // Subscribe each terminal to history replay so reconnects restore the buffer.

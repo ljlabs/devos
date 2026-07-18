@@ -1075,13 +1075,14 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
       // Agent turn is done → set idle
       sqliteDb.updateThreadStatus(threadId, "idle");
     } catch (err: any) {
+      logError("server", `Message send failed: ${err.message}`, threadId);
       insertAndBroadcast(threadId, {
         id: newId("msg-err"),
         threadId,
         timestamp: new Date().toISOString(),
         raw: { error: err.message },
         type: "error",
-      }, { status: "idle" });
+      }, { status: "idle", lastError: err.message });
     }
   })();
 });
