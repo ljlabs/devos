@@ -328,7 +328,80 @@ describe("ChatCanvas", () => {
       );
       const btn = screen.getByText("Allow");
       await user.click(btn);
-      expect(mockOnPermissionResponse).toHaveBeenCalledWith("allow_once", undefined, "Deploy");
+      expect(mockOnPermissionResponse).toHaveBeenCalledWith("allow_once");
+    });
+
+    it("returns only the selected server-issued allow-similar pattern", async () => {
+      const user = userEvent.setup();
+      const command = 'python -c "import json; print(\\"a && b\\")"';
+      const messages: Message[] = [{
+        id: "msg-pattern",
+        threadId: "t-1",
+        timestamp: "2024-01-01T10:00:00Z",
+        type: "session/request_permission",
+        raw: {
+          id: "perm-pattern",
+          params: {
+            toolCall: { title: command, kind: "execute", rawInput: { command } },
+            options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+            allowSimilar: {
+              command,
+              toolName: "Bash",
+              allowOptionId: "allow",
+              variants: [
+                { label: command, pattern: command },
+                { label: "python -c *", pattern: "python -c *" },
+              ],
+            },
+          },
+        },
+      }];
+
+      render(<ChatCanvas {...baseProps} activeThread={sampleThread} messages={messages} />);
+      await user.click(screen.getByText("Allow Similar…"));
+      await user.click(screen.getByText("Confirm & Allow"));
+      expect(mockOnPermissionResponse).toHaveBeenCalledWith("allow", "python -c *");
+    });
+
+    it("returns only the selected server-issued WebFetch domain pattern", async () => {
+      const user = userEvent.setup();
+      const url = "https://weather.metoffice.gov.uk/forecast/gcpvj0v07";
+      const messages: Message[] = [{
+        id: "msg-fetch-pattern",
+        threadId: "t-1",
+        timestamp: "2024-01-01T10:00:00Z",
+        type: "session/request_permission",
+        raw: {
+          id: "perm-fetch-pattern",
+          params: {
+            toolCall: {
+              title: `Fetch ${url}`,
+              kind: "fetch",
+              rawInput: { url },
+            },
+            options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+            // This is the presentation produced by PermissionManager.evaluate.
+            allowSimilar: {
+              command: url,
+              toolName: "WebFetch",
+              allowOptionId: "allow",
+              variants: [
+                { label: url, pattern: url },
+                { label: "domain:weather.metoffice.gov.uk", pattern: "domain:weather.metoffice.gov.uk" },
+              ],
+            },
+          },
+        },
+      }];
+
+      render(<ChatCanvas {...baseProps} activeThread={sampleThread} messages={messages} />);
+      expect(screen.getByText("Allow Similar…")).toBeInTheDocument();
+      await user.click(screen.getByText("Allow Similar…"));
+      await user.click(screen.getByText("Confirm & Allow"));
+      expect(mockOnPermissionResponse).toHaveBeenCalledWith(
+        "allow",
+        "domain:weather.metoffice.gov.uk"
+      );
     });
 
     it("should hide permission bubble after response", () => {

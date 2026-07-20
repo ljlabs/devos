@@ -2,7 +2,7 @@
  * @vitest-environment node
  */
 import { describe, it, expect } from "vitest";
-import { derivePatternVariants } from "./patterns";
+import { checkAllowedPattern, derivePatternVariants, parseToolPattern, PermissionManager, splitShellCommand } from "./permissions";
 
 // ---------------------------------------------------------------------------
 // Shell command variants — simple (non-compound)
@@ -314,13 +314,13 @@ describe("derivePatternVariants — compound shell commands", () => {
   it("second variant is scoped — first-arg directory prefix per sub-command", () => {
     const v = derivePatternVariants(COMMAND, KIND);
     expect(v[1].label).toBe("cd LekkerLoyal/*, cat functions/*, head *");
-    expect(v[1].pattern).toBe("cd LekkerLoyal/* && cat functions/* && head *");
+    expect(v[1].pattern).toBe("cd LekkerLoyal/* && cat functions/* | head *");
   });
 
   it("third variant is bare — any args to any of these commands", () => {
     const v = derivePatternVariants(COMMAND, KIND);
     expect(v[2].label).toBe("cd *, cat *, head *");
-    expect(v[2].pattern).toBe("cd * && cat * && head *");
+    expect(v[2].pattern).toBe("cd * && cat * | head *");
   });
 
   it("never duplicates patterns", () => {
@@ -492,13 +492,13 @@ describe("derivePatternVariants — compound shell commands", () => {
     // cat functions/package.json → dir = functions → "cat functions/*"
     // head -40        → firstArg starts with '-', falls through → "head *"
     expect(v[1].label).toBe("cd LekkerLoyal/*, cat functions/*, head *");
-    expect(v[1].pattern).toBe("cd LekkerLoyal/* && cat functions/* && head *");
+    expect(v[1].pattern).toBe("cd LekkerLoyal/* && cat functions/* | head *");
   });
 
   it("third variant is the bare option — any args to any of these commands", () => {
     const v = derivePatternVariants(COMMAND, KIND);
     expect(v[2].label).toBe("cd *, cat *, head *");
-    expect(v[2].pattern).toBe("cd * && cat * && head *");
+    expect(v[2].pattern).toBe("cd * && cat * | head *");
   });
 
   it("never duplicates patterns", () => {
@@ -719,9 +719,9 @@ describe("derivePatternVariants — quoted operators must NOT trigger compound p
     // Should get 3 variants: exact + scoped + bare (compound path)
     expect(v.length).toBe(3);
     expect(v[0].pattern).toBe(cmd); // exact
-    // Scoped and bare variants contain compound operators
-    expect(v[1].pattern).toContain("&&");
-    expect(v[2].pattern).toContain("&&");
+    // Scoped and bare variants preserve the real pipeline operator
+    expect(v[1].pattern).toContain("|");
+    expect(v[2].pattern).toContain("|");
   });
 
   it("unquoted && IS treated as compound", () => {
@@ -752,5 +752,179 @@ describe("derivePatternVariants — quoted operators must NOT trigger compound p
     const normCmd2 = cmd2.replace(/\\/g, "/");
     const prefix = savedPattern.slice(0, -1); // remove trailing *
     expect(normCmd2.startsWith(prefix)).toBe(true);
+  });
+});
+
+
+describe("centralized allow-similar regressions", () => {
+  it("canonicalizes ACP Bash(*) labels and scopes them to Bash", () => {
+    expect(parseToolPattern("Always Allow Bash(*)")).toEqual({ toolName: "Bash", pattern: "*" });
+    const patterns = [{ pattern: "bash(*)", variant: "execute", createdAt: "2026-01-01" } as any];
+    expect(checkAllowedPattern("anything --goes", "Bash", patterns)).toBe(true);
+    expect(checkAllowedPattern("anything --goes", "Edit", patterns)).toBe(false);
+    expect(checkAllowedPattern("anything --goes", undefined, patterns)).toBe(false);
+  });
+
+  it("round-trips an && compound variant into future approval", () => {
+    const first = "cd project-a && npm test -- --runInBand";
+    const saved = derivePatternVariants(first, "execute")[2].pattern;
+    expect(saved).toBe("cd * && npm *");
+    expect(checkAllowedPattern("cd project-b && npm run test", "Bash", [
+      { pattern: saved, variant: "execute", toolName: "Bash", createdAt: "2026-01-01" } as any,
+    ])).toBe(true);
+    expect(checkAllowedPattern("cd project-b; npm run test", "Bash", [
+      { pattern: saved, variant: "execute", toolName: "Bash", createdAt: "2026-01-01" } as any,
+    ])).toBe(true);
+  });
+
+  it("round-trips a semicolon compound variant and preserves its operator", () => {
+    const first = "cd project-a; npm test -- --runInBand";
+    const saved = derivePatternVariants(first, "execute")[2].pattern;
+    expect(saved).toBe("cd * ; npm *");
+    expect(checkAllowedPattern("cd project-b; npm run test", "Bash", [
+      { pattern: saved, variant: "execute", toolName: "Bash", createdAt: "2026-01-01" } as any,
+    ])).toBe(true);
+  });
+
+  it("keeps escaped python -c scripts reusable through a quoted pipeline", () => {
+    const first = 'python -c "import json; print(\\"a && b\\")" | echo "done"';
+    const second = 'python -c "import sys; print(\\"c; d && e\\")" | echo "done"';
+    expect(splitShellCommand(first).commands).toEqual([
+      'python -c "import json; print(\\"a && b\\")"',
+      'echo "done"',
+    ]);
+
+    const saved = derivePatternVariants(first, "execute")
+      .find((item) => item.pattern === "python -c * | echo *")?.pattern;
+    expect(saved).toBe("python -c * | echo *");
+    expect(checkAllowedPattern(second, "Bash", [
+      { pattern: saved!, variant: "execute", toolName: "Bash", createdAt: "2026-01-01" } as any,
+    ])).toBe(true);
+  });
+
+  it("reuses messy multi-stage python compounds with quoted operators and redirection", () => {
+    const first = 'python -c "import json; print(\\"a && b\\")" 2>&1 | tee "agent-output.log" | sed -n "1,20p" && echo "status: ok"';
+    const second = 'python -c "import sys; print(\\"c; d || e\\")" 2>&1 | tee "run-output.log" | sed -n "1,50p" && echo "status: ok"';
+    const saved = derivePatternVariants(first, "execute")
+      .find((item) => item.pattern === "python -c * | tee * | sed * && echo *")?.pattern;
+    expect(saved).toBe("python -c * | tee * | sed * && echo *");
+    expect(checkAllowedPattern(second, "Bash", [
+      { pattern: saved!, variant: "execute", toolName: "Bash", createdAt: "2026-01-01" } as any,
+    ])).toBe(true);
+  });
+});
+
+
+describe("PermissionManager decision boundary", () => {
+  const request = {
+    id: 7,
+    method: "session/request_permission",
+    params: {
+      options: [{ kind: "allow_once", name: "Allow", optionId: "allow" }],
+      toolCall: { kind: "execute", rawInput: { command: "npm run build" } },
+    },
+  };
+
+  it("auto-approves without handing the request to the UI when a pattern matches", () => {
+    const db = {
+      getAllowedPatterns: () => [{ pattern: "Bash(npm run *)", variant: "execute", createdAt: "2026-01-01" }],
+    } as any;
+    expect(new PermissionManager(db).evaluate(request)).toEqual(expect.objectContaining({
+      action: "auto_approve",
+      requestId: 7,
+      optionId: "allow",
+      toolName: "Bash",
+    }));
+  });
+
+  it("hands server-derived variants to the UI when no pattern matches", () => {
+    const db = { getAllowedPatterns: () => [] } as any;
+    const decision = new PermissionManager(db).evaluate(request);
+    expect(decision?.action).toBe("request_user");
+    if (decision?.action === "request_user") {
+      expect(decision.raw.params.allowSimilar.toolName).toBe("Bash");
+      expect(decision.raw.params.allowSimilar.variants.map((item: any) => item.pattern)).toContain("npm run build *");
+    }
+  });
+});
+
+
+describe("reported curl pipeline and WebFetch regressions", () => {
+  it("matches a legacy && compound pattern against the live pipe command", () => {
+    const command = 'curl -s "https://www.bbc.com/weather/2643743" | head -200';
+    expect(checkAllowedPattern(command, "Bash", [
+      { pattern: "curl * && head *", variant: "execute", toolName: "Bash", createdAt: "2026-01-01" },
+    ])).toBe(true);
+  });
+
+  it("deduplicates identical compound variants when scoped and bare forms converge", () => {
+    const patterns = derivePatternVariants('curl -s "https://www.bbc.com/weather/2643743" | head -200', "execute");
+    expect(patterns.map((item) => item.pattern)).toEqual([
+      'curl -s "https://www.bbc.com/weather/2643743" | head -200',
+      "curl * | head *",
+    ]);
+  });
+
+  it("derives WebFetch variants and auto-approves the same domain", () => {
+    const manager = new PermissionManager({
+      getAllowedPatterns: () => [{
+        pattern: "domain:weather.metoffice.gov.uk",
+        toolName: "WebFetch",
+        variant: "execute",
+        createdAt: "2026-01-01",
+      }],
+    } as any);
+    const request = {
+      id: 9,
+      method: "session/request_permission",
+      params: {
+        options: [{ kind: "allow_once", name: "Allow", optionId: "allow" }],
+        toolCall: {
+          kind: "fetch",
+          title: "Fetch https://weather.metoffice.gov.uk/forecast/gcpvj0v07",
+          rawInput: { url: "https://weather.metoffice.gov.uk/forecast/gcpvj0v07" },
+        },
+      },
+    };
+    const decision = manager.evaluate(request);
+    expect(decision).toEqual(expect.objectContaining({
+      action: "auto_approve",
+      toolName: "WebFetch",
+    }));
+
+    const prompt = manager.evaluate({
+      ...request,
+      id: 10,
+      params: {
+        ...request.params,
+        toolCall: {
+          ...request.params.toolCall,
+          rawInput: { url: "https://www.bbc.com/weather/2643743" },
+        },
+      },
+    });
+    expect(prompt?.action).toBe("request_user");
+    if (prompt?.action === "request_user") {
+      expect(prompt.presentation.variants).toHaveLength(2);
+      expect(prompt.presentation.toolName).toBe("WebFetch");
+      expect(prompt.presentation.variants[1].pattern).toBe("domain:www.bbc.com");
+    }
+  });
+
+  it("derives WebFetch variants when ACP sends a domain instead of a URL", () => {
+    const manager = new PermissionManager({ getAllowedPatterns: () => [] } as any);
+    const decision = manager.evaluate({
+      id: 11,
+      method: "session/request_permission",
+      params: {
+        options: [{ kind: "allow_once", name: "Allow", optionId: "allow" }],
+        toolCall: { kind: "fetch", rawInput: { domain: "weather.metoffice.gov.uk" } },
+      },
+    });
+    expect(decision?.action).toBe("request_user");
+    if (decision?.action === "request_user") {
+      expect(decision.presentation.toolName).toBe("WebFetch");
+      expect(decision.presentation.variants.length).toBeGreaterThan(1);
+    }
   });
 });

@@ -25,8 +25,8 @@ export interface UseWebSocketReturn {
   isConnected: boolean;
   /** Send a user message via WebSocket */
   sendMessage: (threadId: string, text: string, clientMsgId: string) => void;
-  /** Respond to a permission request via WebSocket */
-  respondToPermission: (threadId: string, optionId: string, toolCommand?: string, toolName?: string) => void;
+  /** Respond using an ACP option and, optionally, a server-issued pattern. */
+  respondToPermission: (threadId: string, optionId: string, selectedPattern?: string) => void;
   /** Cancel an agent turn via WebSocket */
   cancelAgent: (threadId: string) => void;
 }
@@ -161,10 +161,10 @@ export function useWebSocket({
     ws.send(JSON.stringify({ type: "send_message", threadId, text, clientMsgId }));
   }, []);
 
-  const respondToPermission = useCallback((threadId: string, optionId: string, toolCommand?: string, toolName?: string) => {
+  const respondToPermission = useCallback((threadId: string, optionId: string, selectedPattern?: string) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: "respond", threadId, optionId, toolCommand, toolName }));
+    ws.send(JSON.stringify({ type: "respond", threadId, optionId, selectedPattern }));
   }, []);
 
   const cancelAgent = useCallback((threadId: string) => {

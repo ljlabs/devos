@@ -3,7 +3,7 @@
  *
  * db.sqlite.mock-real.test.ts
  *
- * Tests pagination against real mock database (devos_mock.db).
+ * Tests pagination against a representative, self-contained SQLite fixture.
  * Verifies that:
  * 1. Messages are retrieved without repetition
  * 2. Cursor-based pagination returns different content at each step
@@ -16,35 +16,46 @@ import path from "path";
 import os from "os";
 import { SqliteDb } from "./db.sqlite";
 
-describe("Real Mock Database Pagination Tests", () => {
+describe("Representative Database Pagination Tests", () => {
   let db: SqliteDb;
   let mockDbPath: string;
-  const mockDbSource = path.join(process.cwd(), "devos_mock.db");
 
   beforeAll(() => {
-    // Check if mock database exists
-    if (!fs.existsSync(mockDbSource)) {
-      throw new Error(
-        `Mock database not found at ${mockDbSource}. Please ensure devos_mock.db exists in the project root.`
-      );
-    }
-
-    // Copy mock database to temp location for testing (avoid modifying original)
     mockDbPath = path.join(
       os.tmpdir(),
       `test-mock-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
     );
-
-    fs.copyFileSync(mockDbSource, mockDbPath);
     db = new SqliteDb(mockDbPath);
+
+    const threadId = "thread-pagination-fixture";
+    const messages = Array.from({ length: 35 }, (_, index) => ({
+      id: `msg-${String(index + 1).padStart(3, "0")}`,
+      threadId,
+      timestamp: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+      type: index % 2 === 0 ? "user_message" : "session/update",
+      raw: index % 2 === 0
+        ? { role: "user", content: `Fixture prompt ${index + 1}` }
+        : { method: "session/update", params: { update: { text: `Fixture response ${index + 1}` } } },
+    }));
+
+    db.writeDb({
+      workspaces: [{ id: "ws-pagination-fixture", name: "Pagination Fixture", path: os.tmpdir() }],
+      threads: [{
+        id: threadId,
+        workspaceId: "ws-pagination-fixture",
+        title: "Pagination Thread",
+        status: "idle",
+      }],
+      messages,
+      allowedPatterns: [],
+    });
   });
 
   afterAll(() => {
-    db.close();
-    // Cleanup temp database
-    if (fs.existsSync(mockDbPath)) fs.unlinkSync(mockDbPath);
-    if (fs.existsSync(mockDbPath + "-shm")) fs.unlinkSync(mockDbPath + "-shm");
-    if (fs.existsSync(mockDbPath + "-wal")) fs.unlinkSync(mockDbPath + "-wal");
+    db?.close();
+    if (mockDbPath && fs.existsSync(mockDbPath)) fs.unlinkSync(mockDbPath);
+    if (mockDbPath && fs.existsSync(mockDbPath + "-shm")) fs.unlinkSync(mockDbPath + "-shm");
+    if (mockDbPath && fs.existsSync(mockDbPath + "-wal")) fs.unlinkSync(mockDbPath + "-wal");
   });
 
   describe("Database structure validation", () => {

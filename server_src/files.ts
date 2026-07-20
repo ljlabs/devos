@@ -44,9 +44,11 @@ const EXCLUDE_PATTERNS = [
 
 /**
  * Check if a basename should be excluded from listings.
+ * Environment files may contain secrets; keep the template visible.
  */
 function isExcluded(name: string): boolean {
-  return EXCLUDE_PATTERNS.includes(name);
+  const isSensitiveEnv = name === ".env" || (name.startsWith(".env.") && name !== ".env.example");
+  return EXCLUDE_PATTERNS.includes(name) || isSensitiveEnv;
 }
 
 /**

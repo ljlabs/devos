@@ -165,6 +165,7 @@ export function getMessageContent(msg: Message): { type: string; content: any } 
       content: {
         toolCall: raw.params?.toolCall,
         options: raw.params?.options,
+        allowSimilar: raw.params?.allowSimilar,
         permissionId: raw.id,
         sessionId: raw.params?.sessionId,
       },
@@ -192,7 +193,7 @@ interface ChatCanvasProps {
   onChangeInput: (text: string) => void;
   onSendMessage: () => void;
   onCancelAgent: () => void;
-  onPermissionResponse: (optionId: string, toolCommand?: string, toolName?: string) => void;
+  onPermissionResponse: (optionId: string, selectedPattern?: string) => void;
   onDeploy: () => void;
   isDeploying: boolean;
   threadLogs: any[];
@@ -635,7 +636,7 @@ export default function ChatCanvas({
 
             // Permission request - render as interactive bubble with allow/deny buttons
             if (parsed.type === "permission") {
-              const { toolCall, options, permissionId } = parsed.content;
+              const { toolCall, options, allowSimilar } = parsed.content;
 
               // If already responded to, don't show the prompt again
               const currentMsgIdx = messages.indexOf(msg);
@@ -649,9 +650,9 @@ export default function ChatCanvas({
                   key={msg.id}
                   toolCall={toolCall}
                   options={options}
+                  allowSimilar={allowSimilar}
                   onRespond={onPermissionResponse}
                   timestamp={msg.timestamp}
-                  workspacePath={workspacePath}
                 />
               );
             }

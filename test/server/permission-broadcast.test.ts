@@ -45,7 +45,38 @@ function setupThreadWithPendingPermission() {
         { kind: "reject_once", name: "Reject", optionId: "reject" },
       ],
     }],
-    messages: [],
+    messages: [{
+      id: `msg-request-${Date.now()}`,
+      threadId,
+      timestamp: new Date().toISOString(),
+      type: "session/request_permission",
+      raw: {
+        jsonrpc: "2.0",
+        id: 42,
+        method: "session/request_permission",
+        params: {
+          options: [
+            { kind: "allow_always", name: "Always Allow Bash(npm test *)", optionId: "allow_always" },
+            { kind: "allow_once", name: "Allow", optionId: "allow" },
+            { kind: "reject_once", name: "Reject", optionId: "reject" },
+          ],
+          toolCall: {
+            kind: "execute",
+            title: "npm test 2>&1 | tail -40",
+            rawInput: { command: "npm test 2>&1 | tail -40" },
+          },
+          allowSimilar: {
+            command: "npm test 2>&1 | tail -40",
+            toolName: "Bash",
+            allowOptionId: "allow",
+            variants: [
+              { label: "npm test 2>&1 | tail -40", pattern: "npm test 2>&1 | tail -40" },
+              { label: "npm *, tail *", pattern: "npm * | tail *" },
+            ],
+          },
+        },
+      },
+    }],
     allowedPatterns: [],
   });
 
@@ -79,7 +110,7 @@ describe("HTTP POST /api/threads/:threadId/respond — permission response", () 
 
     await request(app)
       .post(`/api/threads/${threadId}/respond`)
-      .send({ optionId: "allow_once" });
+      .send({ optionId: "allow" });
 
     const db = readDb();
     const thread = db.threads.find((t: any) => t.id === threadId);
@@ -88,12 +119,12 @@ describe("HTTP POST /api/threads/:threadId/respond — permission response", () 
     expect(thread.pendingPermissionOptions).toBeUndefined();
   });
 
-  it("should save pattern when optionId is allow_always with toolCommand", async () => {
+  it("should derive allow-always pattern from the pending ACP option", async () => {
     const { threadId } = setupThreadWithPendingPermission();
 
     await request(app)
       .post(`/api/threads/${threadId}/respond`)
-      .send({ optionId: "allow_always", toolCommand: "npm test *", toolName: "Bash" });
+      .send({ optionId: "allow_always" });
 
     const db = readDb();
     const pattern = db.allowedPatterns.find((p: any) => p.pattern === "npm test *" && p.toolName === "Bash");
@@ -102,7 +133,7 @@ describe("HTTP POST /api/threads/:threadId/respond — permission response", () 
   });
 
   it("should persist correct message structure for each optionId", async () => {
-    for (const optionId of ["allow", "allow_once", "reject", "allow_always"]) {
+    for (const optionId of ["allow", "reject", "allow_always"]) {
       const { threadId } = setupThreadWithPendingPermission();
 
       await request(app)
@@ -159,7 +190,7 @@ describe("WebSocket broadcast — permission response message", () => {
 
     await request(app)
       .post(`/api/threads/${threadId}/respond`)
-      .send({ optionId: "allow_once" });
+      .send({ optionId: "allow" });
 
     expect(broadcastThreadSpy).toHaveBeenCalled();
     const call = broadcastThreadSpy.mock.calls.find(([tid]) => tid === threadId);
@@ -189,7 +220,7 @@ describe("WebSocket broadcast — permission response message", () => {
   });
 
   it("broadcast payload matches what useWebSocket.onMessage switch expects", async () => {
-    for (const optionId of ["allow", "allow_once", "reject", "allow_always"]) {
+    for (const optionId of ["allow", "reject", "allow_always"]) {
       const { threadId } = setupThreadWithPendingPermission();
 
       await request(app)
@@ -210,5 +241,33 @@ describe("WebSocket broadcast — permission response message", () => {
 
       broadcastSpy.mockClear();
     }
+  });
+});
+
+
+describe("server-owned Allow Similar response", () => {
+  it("persists a server-issued compound pattern before resolving permission", async () => {
+    const { threadId } = setupThreadWithPendingPermission();
+    const response = await request(app)
+      .post(`/api/threads/${threadId}/respond`)
+      .send({ optionId: "allow", selectedPattern: "npm * | tail *" });
+
+    expect(response.status).toBe(200);
+    expect(readDb().allowedPatterns).toContainEqual(expect.objectContaining({
+      pattern: "npm * | tail *",
+      toolName: "Bash",
+      variant: "execute",
+    }));
+  });
+
+  it("rejects a client-invented pattern not issued with the pending request", async () => {
+    const { threadId } = setupThreadWithPendingPermission();
+    const response = await request(app)
+      .post(`/api/threads/${threadId}/respond`)
+      .send({ optionId: "allow", selectedPattern: "Bash(*)" });
+
+    expect(response.status).toBe(400);
+    expect(readDb().allowedPatterns).toHaveLength(0);
+    expect(readDb().threads[0].pendingPermissionId).toBe(42);
   });
 });

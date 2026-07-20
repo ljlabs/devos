@@ -24,7 +24,7 @@ interface MobileChatCanvasProps {
   onChangeInput: (text: string) => void;
   onSendMessage: () => void;
   onCancelAgent: () => void;
-  onPermissionResponse: (optionId: string, toolCommand?: string, toolName?: string) => void;
+  onPermissionResponse: (optionId: string, selectedPattern?: string) => void;
   onDeploy: () => void;
   isDeploying: boolean;
   threadLogs: any[];
@@ -368,7 +368,7 @@ export default function MobileChatCanvas({
               }
 
               if (parsed.type === "permission") {
-                const { toolCall, options } = parsed.content;
+                const { toolCall, options, allowSimilar } = parsed.content;
                 const currentMsgIdx = messages.indexOf(msg);
                 const alreadyAnswered = messages.slice(currentMsgIdx + 1).some((m) => m.type === "permission_response");
                 if (alreadyAnswered) return null;
@@ -378,9 +378,9 @@ export default function MobileChatCanvas({
                     key={msg.id}
                     toolCall={toolCall}
                     options={options}
+                    allowSimilar={allowSimilar}
                     onRespond={onPermissionResponse}
                     timestamp={msg.timestamp}
-                    workspacePath={workspacePath}
                   />
                 );
               }

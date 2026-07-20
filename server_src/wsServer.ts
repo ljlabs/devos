@@ -36,7 +36,7 @@ export interface WsHandlers {
   /** Handle a user message sent via WebSocket */
   sendMessage(threadId: string, text: string, clientMsgId: string, ws: WebSocket): void;
   /** Handle a permission response sent via WebSocket */
-  respond(threadId: string, optionId: string, toolCommand?: string, toolName?: string): void;
+  respond(threadId: string, optionId: string, selectedPattern?: string): void;
   /** Handle a cancel request sent via WebSocket */
   cancel(threadId: string): void;
 }
@@ -202,12 +202,12 @@ export function initWebSocket(
         }
 
         case "respond": {
-          const { threadId, optionId, toolCommand, toolName } = msg;
+          const { threadId, optionId, selectedPattern } = msg;
           if (!threadId || !optionId) {
             sendJson(ws, { type: "error", message: "threadId and optionId required" });
             return;
           }
-          handlers.respond(threadId, optionId, toolCommand, toolName);
+          handlers.respond(threadId, optionId, selectedPattern);
           break;
         }
 

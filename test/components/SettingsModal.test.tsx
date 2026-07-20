@@ -234,7 +234,52 @@ describe("SettingsModal", () => {
       expect(global.fetch).toHaveBeenCalledWith("/api/allowedPatterns", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pattern: "new-pattern *" }),
+        body: JSON.stringify({ pattern: "new-pattern *", variant: "wildcard" }),
+      });
+    });
+  });
+
+  it("preserves tool scope when editing a scoped pattern", async () => {
+    const scopedPatterns = [
+      {
+        pattern: "curl *",
+        variant: "wildcard",
+        toolName: "Bash",
+        createdAt: "2025-01-15T10:30:00Z",
+      },
+    ];
+    (global.fetch as any)
+      .mockResolvedValueOnce({ ok: true, json: async () => scopedPatterns })
+      .mockResolvedValueOnce({ ok: true, json: async () => scopedPatterns })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [{ ...scopedPatterns[0], pattern: "curl * | head *" }],
+      });
+
+    const user = userEvent.setup();
+    render(<SettingsModal isOpen={true} onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("curl *")).toBeInTheDocument());
+
+    await user.click(screen.getByText("Edit"));
+    const input = screen.getByDisplayValue("curl *");
+    await user.clear(input);
+    await user.type(input, "curl * | head *");
+    await user.click(screen.getByText("Save"));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith("/api/allowedPatterns", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pattern: "curl *", toolName: "Bash" }),
+      });
+      expect(global.fetch).toHaveBeenCalledWith("/api/allowedPatterns", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pattern: "curl * | head *",
+          toolName: "Bash",
+          variant: "wildcard",
+        }),
       });
     });
   });

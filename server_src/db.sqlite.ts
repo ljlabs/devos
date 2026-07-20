@@ -248,6 +248,12 @@ export class SqliteDb {
     return result.changes > 0;
   }
 
+  /** Delete every tool-scoped row with this pattern (used by settings UI). */
+  deleteAllowedPatternAnyTool(pattern: string): boolean {
+    const result = this.db.prepare("DELETE FROM allowedPatterns WHERE pattern = ?").run(pattern);
+    return result.changes > 0;
+  }
+
   // =========================================================================
   // Helpers
   // =========================================================================

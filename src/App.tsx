@@ -327,7 +327,7 @@ function MessagesRoute() {
           onChangeInput={setInputText}
           onSendMessage={handleSendMessage}
           onCancelAgent={() => { if (activeThreadId) wsCancel(activeThreadId); }}
-          onPermissionResponse={(optId, toolCmd, toolName) => { if (activeThreadId) wsRespond(activeThreadId, optId, toolCmd, toolName); }}
+          onPermissionResponse={(optionId, selectedPattern) => { if (activeThreadId) wsRespond(activeThreadId, optionId, selectedPattern); }}
           onDeploy={() => { setIsDeploying(true); setTimeout(() => setIsDeploying(false), 2500); }}
           isDeploying={isDeploying}
           threadLogs={[]}

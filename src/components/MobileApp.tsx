@@ -378,9 +378,9 @@ export default function MobileApp({ initialWorkspaceId, initialThreadId }: { ini
   };
 
   // Handle permission response via WebSocket
-  const handlePermissionResponse = (optionId: string, toolCommand?: string, toolName?: string) => {
+  const handlePermissionResponse = (optionId: string, selectedPattern?: string) => {
     if (!activeThreadId) return;
-    wsRespond(activeThreadId, optionId, toolCommand, toolName);
+    wsRespond(activeThreadId, optionId, selectedPattern);
   };
 
   // Cancel agent turn via WebSocket

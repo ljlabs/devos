@@ -20,9 +20,10 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { ClaudeAgent } from "./claudeAgent";
-import { DatabaseSchema, Workspace, Thread, Message, AllowSimilarPattern } from "../src/types";
+import { DatabaseSchema, Workspace, Thread, Message } from "../src/types";
 import { logInfo, logError, getLogs } from "../src/logger";
 import { SqliteDb } from "./db.sqlite";
+import { PermissionManager, checkAllowedPattern } from "./permissions";
 import * as git from "./git";
 import { listDirectory, readFile, writeFile, createEntry, renameEntry, deleteEntry, moveEntry } from "./files";
 import { initWebSocket, broadcastToThread, broadcastThreadUpdate, broadcastAck, type WsHandlers } from "./wsServer";
@@ -42,6 +43,7 @@ app.use(express.json());
 // ---------------------------------------------------------------------------
 
 const sqliteDb = new SqliteDb(DB_FILE);
+const permissionManager = new PermissionManager(sqliteDb);
 
 // Initialize with default workspaces if empty
 {
@@ -143,20 +145,6 @@ function ensureWorkspace(workspaceId: string, name: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Map ACP tool kind to toolName for permission matching
-// ---------------------------------------------------------------------------
-
-function toolNameFromKind(kind: string | undefined): string | undefined {
-  switch (kind) {
-    case "execute": return "Bash";
-    case "write":   return "Write";
-    case "read":    return "Read";
-    case "edit":    return "Edit";
-    default:        return undefined;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Wire an agent's raw ACP messages into the DB for a thread
 //
 // State tracking:
@@ -199,52 +187,31 @@ function wireAgent(agent: ClaudeAgent, threadId: string): void {
     // "auto_approved" record so the chat log shows what happened.
     // -----------------------------------------------------------------------
     if (raw.method === "session/request_permission") {
-      const rawInput = raw.params?.toolCall?.rawInput ?? {};
-      const toolCommand: string = rawInput.command ?? rawInput.file_path ?? rawInput.path ?? "";
-      
-      // Extract toolName from ACP metadata.
-      // Priority:
-      //   1. _meta.claudeCode.toolName (from session/update events)
-      //   2. tool kind mapping (from session/request_permission events)
-      // The toolCall kind field unambiguously maps to a tool type:
-      //   "execute" → Bash, "write" → Write, "edit" → Edit, "read" → Read
-      const toolName: string | undefined =
-        raw.params?.toolCall?._meta?.claudeCode?.toolName ??
-        raw.params?._meta?.claudeCode?.toolName ??
-        toolNameFromKind(raw.params?.toolCall?.kind);
-      
-      const patterns = sqliteDb.getAllowedPatterns();
+      const thread = sqliteDb.getThreadById(threadId);
+      const workspace = thread ? sqliteDb.getWorkspaceById(thread.workspaceId) : undefined;
+      const decision = permissionManager.evaluate(raw, workspace?.path);
 
-      // Diagnostic logging
-      logInfo("server", 
-        `[PERM-CHECK] toolName="${toolName}" kind="${raw.params?.toolCall?.kind}" ` +
-        `command="${toolCommand.substring(0, 100)}..." patternCount=${patterns.length}`,
-        threadId
-      );
-
-      if (toolCommand && checkAllowedPattern(toolCommand, toolName, patterns)) {
-        logInfo("server", `[AUTO-APPROVE] Pattern matched: "${toolCommand}" (tool=${toolName ?? "unknown"})`, threadId);
-
-        // Use the `agent` captured in this closure — it IS the live process.
-        // Never call ClaudeAgent.getInstance() here; that may return a stale
-        // or newly-constructed instance with no subprocess attached.
+      if (decision?.action === "auto_approve") {
+        logInfo("server", `[AUTO-APPROVE] Pattern matched: "${decision.command}" (tool=${decision.toolName ?? "unknown"})`, threadId);
         agent.send({
           jsonrpc: "2.0",
-          id: raw.id,
-          result: { outcome: { outcome: "selected", optionId: "allow" } },
+          id: decision.requestId,
+          result: { outcome: { outcome: "selected", optionId: decision.optionId } },
         });
-
-        // Record what happened without triggering a permission bubble in UI
         const autoApprovedMsg: Message = {
           id: newId("msg-auto"),
           threadId,
           timestamp: new Date().toISOString(),
           type: "permission_response",
-          raw: { autoApproved: true, command: toolCommand, selected: { optionId: "allow" } },
+          raw: { autoApproved: true, command: decision.command, selected: { optionId: decision.optionId } },
         };
         insertAndBroadcast(threadId, autoApprovedMsg, { status: "thinking" });
+        return;
+      }
 
-        return; // Do NOT fall through to the normal store-and-process path
+      if (decision?.action === "request_user") {
+        raw = decision.raw;
+        logInfo("server", `[PERMISSION REQUIRED] Handing server-derived choices to UI`, threadId);
       }
     }
 
@@ -383,39 +350,24 @@ app.get("/api/workspaces/:workspaceId", (req, res) => {
 });
 
 app.get("/api/allowedPatterns", (_req, res) => {
-  res.json(sqliteDb.getAllowedPatterns());
+  res.json(permissionManager.getPatterns());
 });
 
 app.post("/api/allowedPatterns", (req, res) => {
   const { pattern, toolName, variant } = req.body;
-  if (!pattern || typeof pattern !== "string") {
-    return res.status(400).json({ error: "pattern (string) required" });
+  try {
+    permissionManager.savePattern(pattern, toolName, variant);
+    res.status(201).json(permissionManager.getPatterns());
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
   }
-  // Validate pattern max length (prevent unbounded regex patterns)
-  if (pattern.length > 500) {
-    return res.status(400).json({ error: "pattern must be 500 characters or less" });
-  }
-  const existing = sqliteDb.getAllowedPatterns();
-  const exists = existing.some(
-    (p) => (p.pattern || (p as any)) === pattern && p.toolName === (toolName ?? undefined)
-  );
-  if (!exists) {
-    sqliteDb.insertAllowedPattern({
-      pattern,
-      variant: variant ?? (pattern.endsWith("*") ? "wildcard" : "exact"),
-      toolName: toolName ?? undefined,
-      createdAt: new Date().toISOString(),
-    });
-    logInfo("server", `Pattern saved via API (tool=${toolName ?? "any"}): ${pattern}`, "global");
-  }
-  res.status(201).json(sqliteDb.getAllowedPatterns());
 });
 
 app.delete("/api/allowedPatterns", (req, res) => {
-  const { pattern } = req.body;
+  const { pattern, toolName } = req.body;
   if (!pattern) return res.status(400).json({ error: "pattern required" });
-  sqliteDb.deleteAllowedPattern(pattern);
-  res.json(sqliteDb.getAllowedPatterns());
+  permissionManager.deletePattern(pattern, toolName);
+  res.json(permissionManager.getPatterns());
 });
 
 app.post("/api/workspaces", (req, res) => {
@@ -1088,254 +1040,44 @@ app.post("/api/threads/:threadId/messages", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Helper: Check if a command matches any stored pattern
-// ---------------------------------------------------------------------------
-
-/**
- * Check whether a single (non-compound) command matches any stored pattern.
- * Patterns are matched with forward-slash normalisation and simple * wildcards.
- *
- * Tool-scoping rules:
- *   - Pattern has no toolName  → matches any tool (backward-compatible wildcard)
- *   - Pattern has toolName AND incoming toolName matches → allow
- *   - Pattern has toolName AND incoming toolName is DIFFERENT → skip (wrong tool)
- *   - Pattern has toolName AND incoming toolName is UNDEFINED → skip (unknown tool
- *     must not silently inherit a tool-scoped approval; fail safe)
- */
-function matchesSinglePattern(normCommand: string, toolName: string | undefined, patterns: any[]): boolean {
-  for (const pattern of patterns) {
-    const pat: string = (pattern.pattern || pattern);
-
-    // Tool-scoped pattern: only match when the tool is known and matches
-    if (pattern.toolName) {
-      // If incoming toolName is unknown or mismatched, do not auto-approve
-      if (!toolName || pattern.toolName !== toolName) continue;
-    }
-
-    const normPat = pat.replace(/\\/g, "/");
-
-    // "*" matches everything
-    if (normPat === "*") return true;
-
-    // Pattern ending with * → prefix match
-    if (normPat.endsWith("*")) {
-      const prefix = normPat.slice(0, -1);
-      if (normCommand.startsWith(prefix)) return true;
-    } else {
-      // Exact match
-      if (normCommand === normPat) return true;
-    }
-  }
-
-  return false;
-}
-
-/**
- * Like matchesSinglePattern but ONLY performs exact (non-wildcard) matching.
- * Used to check a full compound command against stored verbatim patterns before
- * splitting it into sub-commands, so that a pattern like "cmd1 | cmd2" that was
- * saved via "Always Allow" can match itself without being broken by the splitter.
- * Wildcard patterns are intentionally skipped — "cd X *" must not short-circuit
- * the compound split and bypass per-sub-command security checking.
- */
-function matchesSinglePatternExact(normCommand: string, toolName: string | undefined, patterns: any[]): boolean {
-  for (const pattern of patterns) {
-    const pat: string = (pattern.pattern || pattern);
-
-    // Tool-scoped pattern: only match when the tool is known and matches
-    if (pattern.toolName) {
-      if (!toolName || pattern.toolName !== toolName) continue;
-    }
-
-    const normPat = pat.replace(/\\/g, "/");
-
-    // Only exact matches — skip wildcard patterns
-    if (normPat === "*" || normPat.endsWith("*")) continue;
-
-    if (normCommand === normPat) return true;
-  }
-
-  return false;
-}
-
-/**
- * Check if a command (possibly compound) is fully covered by stored allow patterns.
- *
- * For compound commands joined by &&, ||, |, or ;, the command is split into
- * individual sub-commands. ALL sub-commands must independently match a stored
- * pattern for the compound command to be auto-approved.
- *
- * This prevents a pattern like "cd LekkerLoyal *" from silently approving
- * "cd LekkerLoyal && gh issue create ..." because the second part (gh issue
- * create) is never in the allowed list.
- *
- * Operators inside quoted strings ("..." or '...') are ignored so that command
- * arguments containing | or ; (e.g. --body "line1 | line2") are not mistakenly
- * split into sub-commands.
- *
- * Exact-before-split: before splitting, we try a direct exact-match against all
- * stored patterns. This handles the case where a user saved "allow_always" for a
- * compound command verbatim (e.g. "gh issue view 9 | head -50") — the stored
- * pattern IS the full compound string, so it must match itself exactly without
- * being broken into sub-commands first.
- */
-function checkAllowedPattern(command: string, toolName: string | undefined, patterns: any[]): boolean {
-  if (!patterns || patterns.length === 0) return false;
-  if (!command || typeof command !== "string") return false;
-
-  // Normalise path separators once
-  const normCommand = command.replace(/\\/g, "/");
-
-  // Detect compound operators OUTSIDE of quoted strings.
-  // Walk the string character by character, tracking whether we're inside
-  // a single- or double-quoted token.  Only flag the command as compound if
-  // we find &&, ||, | or ; while not inside quotes.
-  function findUnquotedOperator(s: string): boolean {
-    let inDouble = false;
-    let inSingle = false;
-    for (let i = 0; i < s.length; i++) {
-      const c = s[i];
-      if (c === '"' && !inSingle) { inDouble = !inDouble; continue; }
-      if (c === "'" && !inDouble) { inSingle = !inSingle; continue; }
-      if (inDouble || inSingle) continue;
-      // Outside quotes — check for operators
-      if (c === "&" && s[i + 1] === "&") return true;
-      if (c === "|") return true;  // covers both | and ||
-      if (c === ";") return true;
-    }
-    return false;
-  }
-
-  if (!findUnquotedOperator(normCommand)) {
-    return matchesSinglePattern(normCommand, toolName, patterns);
-  }
-
-  // The command contains an unquoted compound operator.
-  // FIRST: try an exact full-string match against stored non-wildcard patterns.
-  // This handles the case where a user saved "always allow" for a compound command
-  // verbatim (e.g. "gh issue view 9 | head -50" via the "Always Allow" ACP button).
-  // The stored pattern IS the full compound string, so it must match itself exactly
-  // without being broken into sub-commands.
-  // We only do exact-match here (not wildcard prefix) — a wildcard like "cd X *"
-  // must NOT short-circuit the split and bypass per-sub-command checking.
-  if (matchesSinglePatternExact(normCommand, toolName, patterns)) {
-    return true;
-  }
-
-  // Split on unquoted compound operators.
-  // Walk again, emitting sub-command tokens between operators.
-  function splitOnUnquotedOperators(s: string): string[] {
-    const parts: string[] = [];
-    let inDouble = false;
-    let inSingle = false;
-    let start = 0;
-    let i = 0;
-    while (i < s.length) {
-      const c = s[i];
-      if (c === '"' && !inSingle) { inDouble = !inDouble; i++; continue; }
-      if (c === "'" && !inDouble) { inSingle = !inSingle; i++; continue; }
-      if (inDouble || inSingle) { i++; continue; }
-      // Check for && or ||
-      if ((c === "&" && s[i + 1] === "&") || (c === "|" && s[i + 1] === "|")) {
-        parts.push(s.slice(start, i).trim());
-        i += 2; // skip both chars
-        start = i;
-        continue;
-      }
-      // Single | or ;
-      if (c === "|" || c === ";") {
-        parts.push(s.slice(start, i).trim());
-        i++;
-        start = i;
-        continue;
-      }
-      i++;
-    }
-    // Remainder
-    const last = s.slice(start).trim();
-    if (last) parts.push(last);
-    return parts.filter(Boolean);
-  }
-
-  const subCommands = splitOnUnquotedOperators(normCommand);
-
-  // Every sub-command must be independently allowed
-  return subCommands.every((sub) => matchesSinglePattern(sub, toolName, patterns));
-}
-
-// ---------------------------------------------------------------------------
 // Routes — Permission responses
 // ---------------------------------------------------------------------------
 
-app.post("/api/threads/:threadId/respond", async (req, res) => {
+app.post("/api/threads/:threadId/respond", (req, res) => {
   const { threadId } = req.params;
-  const { optionId, toolCommand, toolName } = req.body;
-
+  const { optionId, selectedPattern } = req.body;
   if (!optionId || typeof optionId !== "string") {
     return res.status(400).json({ error: "optionId (string) required" });
   }
 
-  // Do NOT whitelist valid option IDs here. ACP defines the valid options
-  // in the session/request_permission message; the UI only shows those exact
-  // buttons. Whatever the user clicked is already a valid ACP option.
-  // We just must never forward a UI-invented ID like "allow_similar".
-  if (optionId === "allow_similar") {
-    return res.status(400).json({ error: "allow_similar is a UI concept — save the pattern via POST /api/allowedPatterns, then send the ACP option (allow_once / allow_always)" });
-  }
-
   const thread = sqliteDb.getThreadById(threadId);
   if (!thread) return res.status(404).json({ error: "thread not found" });
-  if (thread.pendingPermissionId === undefined) {
-    return res.status(400).json({ error: "no pending permission" });
+
+  try {
+    const resolution = permissionManager.resolveUserResponse(thread, optionId, selectedPattern);
+    const workspace = sqliteDb.getWorkspaceById(thread.workspaceId);
+    const agent = ClaudeAgent.getInstance(threadId, workspace?.path || thread.workspaceId);
+    wireAgent(agent, threadId);
+    agent.send({
+      jsonrpc: "2.0",
+      id: resolution.requestId,
+      result: { outcome: { outcome: "selected", optionId: resolution.optionId } },
+    });
+    insertAndBroadcast(threadId, {
+      id: newId("msg-perm"),
+      threadId,
+      timestamp: new Date().toISOString(),
+      type: "permission_response",
+      raw: { selected: { optionId }, selectedPattern },
+    }, {
+      status: "thinking",
+      pendingPermissionId: undefined,
+      pendingPermissionOptions: undefined,
+    });
+    res.json({ ok: true });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
   }
-
-  // If user selected "allow_always", save the exact tool command as a pattern
-  // scoped to the specific tool so Bash patterns don't auto-approve Write ops.
-  if (optionId === "allow_always" && toolCommand) {
-    const existing = sqliteDb.getAllowedPatterns();
-    const exists = existing.some(
-      (p) => (p.pattern || (p as any)) === toolCommand && p.toolName === (toolName ?? undefined)
-    );
-    if (!exists) {
-      const kind = toolName
-        ? (["Write", "Edit", "MultiEdit", "Read"].includes(toolName) ? toolName.toLowerCase() : "execute")
-        : "exact";
-      sqliteDb.insertAllowedPattern({
-        pattern: toolCommand,
-        variant: kind as AllowSimilarPattern["variant"],
-        toolName: toolName ?? undefined,
-        createdAt: new Date().toISOString(),
-      });
-      logInfo("server", `Pattern saved (exact, tool=${toolName ?? "any"}): ${toolCommand}`, threadId);
-    }
-  }
-
-  // Look up the workspace to get its path
-  const workspace = sqliteDb.getWorkspaceById(thread.workspaceId);
-  const wsPath = workspace?.path || thread.workspaceId;
-  const agent = ClaudeAgent.getInstance(threadId, wsPath);
-  wireAgent(agent, threadId);
-
-  // Forward the optionId verbatim — it came from ACP's own options list
-  agent.send({
-    jsonrpc: "2.0",
-    id: thread.pendingPermissionId,
-    result: { outcome: { outcome: "selected", optionId } },
-  });
-
-  insertAndBroadcast(threadId, {
-    id: newId("msg-perm"),
-    threadId,
-    timestamp: new Date().toISOString(),
-    type: "permission_response",
-    raw: { selected: { optionId } },
-  }, {
-    status: "thinking",
-    pendingPermissionId: undefined,
-    pendingPermissionOptions: undefined,
-  });
-
-  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -1604,52 +1346,34 @@ const wsHandlers: WsHandlers = {
     })();
   },
 
-  respond: (threadId, optionId, toolCommand, toolName) => {
-    if (optionId === "allow_similar") return;
-
+  respond: (threadId, optionId, selectedPattern) => {
     const thread = sqliteDb.getThreadById(threadId);
-    if (!thread || thread.pendingPermissionId === undefined) return;
+    if (!thread) return;
 
-    if (optionId === "allow_always" && toolCommand) {
-      const existing = sqliteDb.getAllowedPatterns();
-      const exists = existing.some(
-        (p) => (p.pattern || (p as any)) === toolCommand && p.toolName === (toolName ?? undefined)
-      );
-      if (!exists) {
-        const kind = toolName
-          ? (["Write", "Edit", "MultiEdit", "Read"].includes(toolName) ? toolName.toLowerCase() : "execute")
-          : "exact";
-        sqliteDb.insertAllowedPattern({
-          pattern: toolCommand,
-          variant: kind as AllowSimilarPattern["variant"],
-          toolName: toolName ?? undefined,
-          createdAt: new Date().toISOString(),
-        });
-      }
+    try {
+      const resolution = permissionManager.resolveUserResponse(thread, optionId, selectedPattern);
+      const workspace = sqliteDb.getWorkspaceById(thread.workspaceId);
+      const agent = ClaudeAgent.getInstance(threadId, workspace?.path || thread.workspaceId);
+      wireAgent(agent, threadId);
+      agent.send({
+        jsonrpc: "2.0",
+        id: resolution.requestId,
+        result: { outcome: { outcome: "selected", optionId: resolution.optionId } },
+      });
+      insertAndBroadcast(threadId, {
+        id: newId("msg-perm"),
+        threadId,
+        timestamp: new Date().toISOString(),
+        type: "permission_response",
+        raw: { selected: { optionId }, selectedPattern },
+      }, {
+        status: "thinking",
+        pendingPermissionId: undefined,
+        pendingPermissionOptions: undefined,
+      });
+    } catch (error: any) {
+      logError("server", `Permission response rejected: ${error.message}`, threadId);
     }
-
-    const workspace = sqliteDb.getWorkspaceById(thread.workspaceId);
-    const wsPath = workspace?.path || thread.workspaceId;
-    const agent = ClaudeAgent.getInstance(threadId, wsPath);
-    wireAgent(agent, threadId);
-
-    agent.send({
-      jsonrpc: "2.0",
-      id: thread.pendingPermissionId,
-      result: { outcome: { outcome: "selected", optionId } },
-    });
-
-    insertAndBroadcast(threadId, {
-      id: newId("msg-perm"),
-      threadId,
-      timestamp: new Date().toISOString(),
-      type: "permission_response",
-      raw: { selected: { optionId } },
-    }, {
-      status: "thinking",
-      pendingPermissionId: undefined,
-      pendingPermissionOptions: undefined,
-    });
   },
 
   cancel: (threadId) => {

@@ -117,8 +117,8 @@ export default function ChatPage() {
     wsSendMessage(threadId, text, clientMsgId);
   };
 
-  const handlePermissionResponse = (optionId: string, toolCommand?: string, toolName?: string) => {
-    if (threadId) wsRespond(threadId, optionId, toolCommand, toolName);
+  const handlePermissionResponse = (optionId: string, selectedPattern?: string) => {
+    if (threadId) wsRespond(threadId, optionId, selectedPattern);
   };
 
   const handleCancelAgent = () => { if (threadId) wsCancel(threadId); };

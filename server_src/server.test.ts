@@ -2379,3 +2379,41 @@ describe("GET /api/threads/:threadId/messages/paginated — cursor-based paginat
     expect(allIds.size).toBe(25);
   });
 });
+
+
+
+describe("DELETE /api/allowedPatterns — scoped settings rows", () => {
+  beforeEach(() => {
+    seedDb({ workspaces: [], threads: [], messages: [], allowedPatterns: [] });
+  });
+
+  it("deletes a tool-scoped compound pattern when the settings request omits toolName", async () => {
+    await request(app)
+      .post("/api/allowedPatterns")
+      .send({ pattern: "cd * && npm * && tail *", toolName: "Bash", variant: "execute" });
+
+    const response = await request(app)
+      .delete("/api/allowedPatterns")
+      .send({ pattern: "cd * && npm * && tail *" });
+
+    expect(response.status).toBe(200);
+    expect(response.body).not.toContainEqual(expect.objectContaining({
+      pattern: "cd * && npm * && tail *",
+      toolName: "Bash",
+    }));
+    expect(readDb().allowedPatterns).toHaveLength(0);
+  });
+
+  it("deletes only the selected tool row when settings supplies toolName", async () => {
+    await request(app).post("/api/allowedPatterns").send({ pattern: "same *", toolName: "Bash", variant: "execute" });
+    await request(app).post("/api/allowedPatterns").send({ pattern: "same *", toolName: "Edit", variant: "edit" });
+
+    const response = await request(app)
+      .delete("/api/allowedPatterns")
+      .send({ pattern: "same *", toolName: "Bash" });
+
+    expect(response.status).toBe(200);
+    expect(response.body).not.toContainEqual(expect.objectContaining({ pattern: "same *", toolName: "Bash" }));
+    expect(response.body).toContainEqual(expect.objectContaining({ pattern: "same *", toolName: "Edit" }));
+  });
+});
