@@ -86,23 +86,53 @@ export class CwdMarkerStream {
     const data = this.pending + chunk;
     this.pending = "";
 
-    // Strip all complete markers from the combined data.
-    let clean = stripCwdMarkers(data);
-    const cwds = parseCwdMarkers(data);
+    let clean = "";
+    const cwds: string[] = [];
+    let cursor = 0;
 
-    // Check for a partial (unterminated) marker trailing the chunk.
-    const lastPrefix = data.lastIndexOf(CWD_MARKER_PREFIX);
-    if (lastPrefix !== -1) {
-      const tail = data.slice(lastPrefix);
-      if (!tail.includes(CWD_MARKER_SUFFIX)) {
-        // Incomplete marker — hold it back until the next chunk arrives.
-        this.pending = tail;
-        clean = stripCwdMarkers(data.slice(0, lastPrefix));
+    while (cursor < data.length) {
+      const markerStart = data.indexOf(CWD_MARKER_PREFIX, cursor);
+
+      if (markerStart === -1) {
+        // Keep a suffix that could be the beginning of a marker. PTY chunks
+        // can split after any byte, including in the ESC ] 9 ; 9 ; prefix.
+        const remaining = data.slice(cursor);
+        let partialLength = 0;
+        for (let length = 1; length < CWD_MARKER_PREFIX.length; length += 1) {
+          if (
+            remaining.endsWith(CWD_MARKER_PREFIX.slice(0, length)) &&
+            length > partialLength
+          ) {
+            partialLength = length;
+          }
+        }
+
+        if (partialLength > 0) {
+          clean += remaining.slice(0, -partialLength);
+          this.pending = remaining.slice(-partialLength);
+        } else {
+          clean += remaining;
+        }
+        break;
       }
+
+      clean += data.slice(cursor, markerStart);
+      const valueStart = markerStart + CWD_MARKER_PREFIX.length;
+      const markerEnd = data.indexOf(CWD_MARKER_SUFFIX, valueStart);
+
+      if (markerEnd === -1) {
+        // A complete prefix with no terminator yet belongs to the marker and
+        // must stay buffered; forwarding its ESC byte corrupts xterm state.
+        this.pending = data.slice(markerStart);
+        break;
+      }
+
+      cwds.push(data.slice(valueStart, markerEnd));
+      cursor = markerEnd + CWD_MARKER_SUFFIX.length;
     }
 
-    // Safety cap: if a stray ESC ] never terminates, flush to avoid eating
-    // all subsequent real output.
+    // Safety cap: if a stray marker never terminates, flush it rather than
+    // eating all subsequent real output.
     if (this.pending.length > this.maxPendingBytes) {
       clean += this.pending;
       this.pending = "";

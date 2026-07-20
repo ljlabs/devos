@@ -91,15 +91,27 @@ export function useWebSocket({
         case "subscribed":
           onSubscribedRef.current(msg.threadId, msg.messages ?? [], msg.thread ?? null);
           break;
-        case "message":
+        case "message": {
+          // Only deliver messages for the thread we're currently subscribed to
+          const msgThreadId = msg.threadId ?? msg.message?.threadId;
+          if (msgThreadId && msgThreadId !== threadIdRef.current) break;
           onMessageRef.current(msg.message);
           break;
-        case "thread_update":
+        }
+        case "thread_update": {
+          // Only deliver thread updates for the thread we're currently subscribed to
+          const updThreadId = msg.threadId ?? msg.thread?.id;
+          if (updThreadId && updThreadId !== threadIdRef.current) break;
           onThreadUpdateRef.current(msg.thread);
           break;
-        case "ack":
+        }
+        case "ack": {
+          // Only deliver acks for the thread we're currently subscribed to
+          const ackThreadId = msg.threadId;
+          if (ackThreadId && ackThreadId !== threadIdRef.current) break;
           onAckRef.current(msg.clientMsgId, msg.message);
           break;
+        }
         case "error":
           console.error("[ws] server error:", msg.message);
           break;

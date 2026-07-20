@@ -114,7 +114,7 @@ function subscribeClient(ws: WebSocket, threadId: string, readDb: (threadId: str
   sendJson(ws, {
     type: "subscribed",
     threadId,
-    messages: [],
+    messages,
     thread: thread ?? null,
   });
 

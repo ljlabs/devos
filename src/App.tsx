@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Routes, Route, useParams, useNavigate, Navigate, useLocation, Outlet } from "react-router-dom";
 import WorkspaceSidebar from "./components/WorkspaceSidebar";
 import ThreadList from "./components/ThreadList";
@@ -194,6 +194,10 @@ function MessagesRoute() {
   const activeWorkspaceId = workspaceId || "";
   const activeThreadId = threadId || "";
 
+  // Ref for message handler to read current threadId without stale closures
+  const activeThreadIdRef = useRef(activeThreadId);
+  useEffect(() => { activeThreadIdRef.current = activeThreadId; }, [activeThreadId]);
+
   const [threads, setThreads] = useState<Thread[]>([]);
   const [inputText, setInputText] = useState<string>("");
   const [showThreadListOnMobile, setShowThreadListOnMobile] = useState(false);
@@ -202,6 +206,11 @@ function MessagesRoute() {
   const {
     messages, addOptimistic, confirmMessage, setConfirmed, appendMessage, clearOptimistic,
   } = useOptimisticMessages();
+
+  // Clear optimistic messages when switching threads to prevent cross-thread bleed
+  useEffect(() => {
+    clearOptimistic();
+  }, [activeThreadId, clearOptimistic]);
 
   // Paginated message loading
   const {
@@ -214,18 +223,33 @@ function MessagesRoute() {
   } = usePaginatedMessages(activeThreadId);
 
   // Merge paginated messages with optimistic messages (optimistic ones take precedence)
-  const optimisticIds = new Set(messages.map(m => m.id));
+  // Only include optimistic/confirmed messages that belong to the active thread
+  const activeOptimistic = useMemo(
+    () => messages.filter((m) => m.threadId === activeThreadId),
+    [messages, activeThreadId]
+  );
+  const activeOptimisticIds = new Set(activeOptimistic.map((m) => m.id));
   const mergedMessages = useMemo(() => {
-    const paginated = paginatedMessages.filter(m => !optimisticIds.has(m.id));
-    return [...messages, ...paginated].sort(
+    const paginated = paginatedMessages.filter((m) => !activeOptimisticIds.has(m.id));
+    return [...activeOptimistic, ...paginated].sort(
       (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
-  }, [messages, paginatedMessages]);
+  }, [activeOptimistic, paginatedMessages]);
 
-  const handleWsMessage = useCallback((msg: Message) => { appendMessage(msg); }, [appendMessage]);
+  const handleWsMessage = useCallback((msg: Message) => {
+    // Only accept messages for the currently active thread
+    if (msg.threadId === activeThreadIdRef.current) {
+      appendMessage(msg);
+    }
+  }, [appendMessage]);
   const handleWsThreadUpdate = useCallback((thread: Thread) => { setThreads((prev) => prev.map((t) => (t.id === thread.id ? thread : t))); }, []);
   const handleWsAck = useCallback((clientMsgId: string, message: Message) => { confirmMessage(clientMsgId, message); }, [confirmMessage]);
-  const handleWsSubscribed = useCallback(async (_threadId: string, msgs: Message[]) => { setConfirmed(msgs); }, [setConfirmed]);
+  const handleWsSubscribed = useCallback(async (subscribedThreadId: string, msgs: Message[]) => {
+    // Only accept subscription data for the currently active thread
+    if (subscribedThreadId === activeThreadIdRef.current) {
+      setConfirmed(msgs);
+    }
+  }, [setConfirmed]);
   const handleWsConnectionChange = useCallback(() => {}, []);
 
   const { sendMessage: wsSendMessage, respondToPermission: wsRespond, cancelAgent: wsCancel } = useWebSocket({
