@@ -22,7 +22,6 @@ import { useRef, useCallback, useEffect, useMemo, useState } from "react";
 type OutputListener = (data: string) => void;
 type ExitListener = (exitCode: number) => void;
 type HistoryListener = (history: string[]) => void;
-type CwdListener = (cwd: string) => void;
 
 export interface TerminalSocketApi {
   createTerminal: (sessionId: string, cwd?: string, cols?: number, rows?: number) => void;
@@ -32,8 +31,6 @@ export interface TerminalSocketApi {
   subscribe: (sessionId: string, onData: OutputListener, onExit: ExitListener) => () => void;
   /** Subscribe to history replay on reconnect. */
   onHistory: (sessionId: string, listener: HistoryListener) => () => void;
-  /** Subscribe to CWD change notifications. */
-  onCwd: (sessionId: string, listener: CwdListener) => () => void;
 }
 
 export function useTerminalSocket(): TerminalSocketApi {
@@ -43,7 +40,6 @@ export function useTerminalSocket(): TerminalSocketApi {
   const outputListeners = useRef<Map<string, Set<OutputListener>>>(new Map());
   const exitListeners = useRef<Map<string, Set<ExitListener>>>(new Map());
   const historyListeners = useRef<Map<string, Set<HistoryListener>>>(new Map());
-  const cwdListeners = useRef<Map<string, Set<CwdListener>>>(new Map());
   const reconnectTimeoutRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
   // Ref for the connect function so reconnect timeout can call the latest version
@@ -101,11 +97,6 @@ export function useTerminalSocket(): TerminalSocketApi {
           case "terminal_exit": {
             const set = exitListeners.current.get(msg.terminalId);
             if (set) set.forEach((fn) => fn(msg.exitCode as number));
-            break;
-          }
-          case "terminal_cwd": {
-            const set = cwdListeners.current.get(msg.terminalId);
-            if (set) set.forEach((fn) => fn(msg.cwd as string));
             break;
           }
           default:
@@ -225,26 +216,10 @@ export function useTerminalSocket(): TerminalSocketApi {
   );
 
 
-  const onCwd = useCallback(
-    (sessionId: string, listener: CwdListener) => {
-      let set = cwdListeners.current.get(sessionId);
-      if (!set) {
-        set = new Set();
-        cwdListeners.current.set(sessionId, set);
-      }
-      set.add(listener);
-
-      return () => {
-        cwdListeners.current.get(sessionId)?.delete(listener);
-      };
-    },
-    []
-  );
-
   // Stable object identity so consumers' effects don't re-run (and spuriously
   // tear down PTY sessions) on every parent render.
   return useMemo(
-    () => ({ createTerminal, write, resize, closeTerminal, subscribe, onHistory, onCwd }),
-    [createTerminal, write, resize, closeTerminal, subscribe, onHistory, onCwd]
+    () => ({ createTerminal, write, resize, closeTerminal, subscribe, onHistory }),
+    [createTerminal, write, resize, closeTerminal, subscribe, onHistory]
   );
 }

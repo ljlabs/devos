@@ -19,13 +19,7 @@ vi.mock("node-pty", () => ({
   },
 }));
 
-import {
-  TerminalManager,
-  parseCwdMarkers,
-  stripCwdMarkers,
-  CWD_MARKER_PREFIX,
-  CWD_MARKER_SUFFIX,
-} from "../../server_src/terminal";
+import { TerminalManager } from "../../server_src/terminal";
 
 describe("TerminalManager", () => {
   let manager: TerminalManager;
@@ -147,67 +141,4 @@ describe("TerminalManager", () => {
     });
   });
 
-  describe("CWD marker helpers", () => {
-    const marker = (cwd: string) => `${CWD_MARKER_PREFIX}${cwd}${CWD_MARKER_SUFFIX}`;
-
-    it("parseCwdMarkers extracts a single marker", () => {
-      const out = parseCwdMarkers(`some output ${marker("/home/user")} more`);
-      expect(out).toEqual(["/home/user"]);
-    });
-
-    it("parseCwdMarkers extracts multiple markers", () => {
-      const out = parseCwdMarkers(`${marker("/a")}mid${marker("/b")}`);
-      expect(out).toEqual(["/a", "/b"]);
-    });
-
-    it("parseCwdMarkers returns [] when none present", () => {
-      expect(parseCwdMarkers("plain text no markers")).toEqual([]);
-    });
-
-    it("stripCwdMarkers removes markers but keeps surrounding text", () => {
-      const clean = stripCwdMarkers(`prompt ${marker("/root")} done`);
-      expect(clean).toBe("prompt  done");
-    });
-
-    it("stripCwdMarkers is a no-op without markers", () => {
-      expect(stripCwdMarkers("nothing to strip")).toBe("nothing to strip");
-    });
-  });
-
-  describe("getPromptHookCommand()", () => {
-    const isZshPs = (s: string) => s.includes("precmd") && s.includes(CWD_MARKER_PREFIX);
-    const isBashPs = (s: string) =>
-      s.includes("PROMPT_COMMAND") && s.includes(CWD_MARKER_PREFIX);
-    const isPsPs = (s: string) =>
-      s.includes(".devos_prompt_hook.ps1") && s.includes("Remove-Item");
-
-    it("returns empty string for PowerShell (hook loaded at startup via -NoExit -Command)", () => {
-      vi.spyOn(manager, "getShell").mockReturnValue({
-        command: "powershell.exe",
-        args: ["-NoLogo"],
-      });
-      const hook = manager.getPromptHookCommand();
-      expect(hook).toBe("");
-      expect(isBashPs(hook)).toBe(false);
-      expect(isZshPs(hook)).toBe(false);
-    });
-
-    it("returns a zsh precmd hook when shell is zsh", () => {
-      vi.spyOn(manager, "getShell").mockReturnValue({
-        command: "/bin/zsh",
-        args: [],
-      });
-      const hook = manager.getPromptHookCommand();
-      expect(isZshPs(hook)).toBe(true);
-    });
-
-    it("returns a bash PROMPT_COMMAND hook when shell is bash", () => {
-      vi.spyOn(manager, "getShell").mockReturnValue({
-        command: "/bin/bash",
-        args: [],
-      });
-      const hook = manager.getPromptHookCommand();
-      expect(isBashPs(hook)).toBe(true);
-    });
-  });
 });

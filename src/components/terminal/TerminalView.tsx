@@ -137,6 +137,8 @@ export default function TerminalView({ cwd }: TerminalViewProps) {
     return tabs[0].id;
   });
   const [focusedLeafId, setFocusedLeafId] = useState<string | null>(null);
+  const [editingTabId, setEditingTabId] = useState<string | null>(null);
+  const [tabEditValue, setTabEditValue] = useState("");
   const draggedLeafIdRef = useRef<string | null>(null);
 
   // Buffered PTY output per session, accumulated before xterm opens.
@@ -181,18 +183,7 @@ export default function TerminalView({ cwd }: TerminalViewProps) {
           // PTY exited
         }
       );
-      // Track live CWD changes from the backend. The setTabs call below
-      // updates the layout node's cwd (persisting across refreshes) and
-      // re-renders, so the title bar reflects the new directory.
-      const unsubCwd = socket.onCwd(leaf.sessionId, (newCwd: string) => {
-        setTabs((prev) =>
-          prev.map((t) => ({
-            ...t,
-            layout: updateLeaf(t.layout, leaf.id, { cwd: newCwd }),
-          }))
-        );
-      });
-      terminalsRef.current.set(leaf.sessionId, { term, unsubscribe: () => { unsubscribe(); unsubCwd(); } });
+      terminalsRef.current.set(leaf.sessionId, { term, unsubscribe });
       socket.createTerminal(leaf.sessionId, leaf.cwd, 80, 24);
       knownSessionsRef.current.add(leaf.sessionId);
     },
@@ -354,6 +345,27 @@ export default function TerminalView({ cwd }: TerminalViewProps) {
     []
   );
 
+  const startTabRename = useCallback((tab: TerminalTab) => {
+    setEditingTabId(tab.id);
+    setTabEditValue(tab.title);
+  }, []);
+
+  const cancelTabRename = useCallback(() => {
+    setEditingTabId(null);
+    setTabEditValue("");
+  }, []);
+
+  const commitTabRename = useCallback(() => {
+    if (!editingTabId) return;
+    const title = tabEditValue.trim();
+    if (title) {
+      setTabs((prev) =>
+        prev.map((tab) => (tab.id === editingTabId ? { ...tab, title } : tab))
+      );
+    }
+    cancelTabRename();
+  }, [editingTabId, tabEditValue, cancelTabRename]);
+
   const handleNewTab = useCallback(() => {
     const tab = makeTab(cwd);
     setTabs((prev) => [...prev, tab]);
@@ -493,7 +505,32 @@ export default function TerminalView({ cwd }: TerminalViewProps) {
                 }`}
                 onClick={() => setActiveTabId(tab.id)}
               >
-                <span>{tab.title}</span>
+                {editingTabId === tab.id ? (
+                  <input
+                    autoFocus
+                    value={tabEditValue}
+                    onChange={(e) => setTabEditValue(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitTabRename();
+                      if (e.key === "Escape") cancelTabRename();
+                    }}
+                    onBlur={commitTabRename}
+                    className="w-24 bg-white/5 border border-white/10 rounded px-1 text-xs text-white outline-none"
+                    aria-label="Terminal tab name"
+                  />
+                ) : (
+                  <span
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      startTabRename(tab);
+                    }}
+                    title="Double-click to rename"
+                  >
+                    {tab.title}
+                  </span>
+                )}
                 {tabs.length > 1 && (
                   <button
                     onClick={(e) => {
